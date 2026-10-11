@@ -5,6 +5,8 @@ import { PaymentModel } from '../models/payment.model';
 import { UserModel } from '../models/user.model';
 import { env } from './env';
 
+let connectionPromise: Promise<void> | undefined;
+
 const epochExpression = (field: string) => ({
   $cond: [
     { $eq: [{ $type: `$${field}` }, 'date'] },
@@ -41,12 +43,23 @@ const migrateLegacyDatabaseValues = async (): Promise<void> => {
 };
 
 export const connectDatabase = async (): Promise<void> => {
-  mongoose.set('strictQuery', true);
-  await mongoose.connect(env.mongoUri);
-  await migrateLegacyDatabaseValues();
-  console.log('Connected to MongoDB');
+  if (mongoose.connection.readyState === 1) return;
+  if (connectionPromise) return connectionPromise;
+
+  connectionPromise = (async () => {
+    mongoose.set('strictQuery', true);
+    await mongoose.connect(env.mongoUri);
+    await migrateLegacyDatabaseValues();
+    console.log('Connected to MongoDB');
+  })().catch((error) => {
+    connectionPromise = undefined;
+    throw error;
+  });
+
+  return connectionPromise;
 };
 
 export const disconnectDatabase = async (): Promise<void> => {
+  connectionPromise = undefined;
   await mongoose.disconnect();
 };

@@ -4,10 +4,12 @@ import { AUTH_COOKIE_MAX_AGE_MS, AUTH_COOKIE_NAME } from '../constants';
 import { env } from '../config/env';
 import { getCurrentUser, loginUser, registerBorrower } from '../services/auth.service';
 
+const authCookieSameSite: 'none' | 'lax' = env.nodeEnv === 'production' ? 'none' : 'lax';
+
 const authCookieOptions = {
   httpOnly: true,
   secure: env.nodeEnv === 'production',
-  sameSite: 'lax' as const,
+  sameSite: authCookieSameSite,
   maxAge: AUTH_COOKIE_MAX_AGE_MS,
   path: '/',
 };
@@ -15,7 +17,7 @@ const authCookieOptions = {
 const clearAuthCookieOptions = {
   httpOnly: true,
   secure: env.nodeEnv === 'production',
-  sameSite: 'lax' as const,
+  sameSite: authCookieSameSite,
   path: '/',
 };
 

@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 
 import { AuthLayout } from '@/components/auth-layout';
 import { useToast } from '@/components/toast';
-import { ErrorMessage, Spinner } from '@/components/ui';
+import { ErrorMessage, LoadingScreen } from '@/components/ui';
 import { ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 
@@ -22,6 +22,10 @@ export default function LoginPage() {
   useEffect(() => {
     if (!loading && user) router.replace(user.role === 'BORROWER' ? '/borrower/apply' : '/dashboard');
   }, [loading, router, user]);
+
+  if (loading || submitting || user) {
+    return <LoadingScreen label={submitting ? 'Signing you in...' : 'Loading your workspace...'} />;
+  }
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -84,7 +88,6 @@ export default function LoginPage() {
         </label>
         <ErrorMessage message={error} />
         <button className="primary-button w-full py-3.5" disabled={submitting}>
-          {submitting && <Spinner />}
           {submitting ? 'Signing in…' : 'Sign in'}
         </button>
       </form>

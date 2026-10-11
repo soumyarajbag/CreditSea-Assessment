@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "express",
+  "buildCommand": "echo Vercel native Express TypeScript bundling",
+  "functions": {
+    "src/server.ts": {
+      "maxDuration": 60,
+      "includeFiles": "node_modules/swagger-ui-dist/**/*"
+    }
+  }
+}

@@ -1,15 +1,9 @@
-import { app } from './app';
-import { connectDatabase } from './config/database';
-import { env } from './config/env';
+import express from 'express';
 
-const start = async (): Promise<void> => {
-  await connectDatabase();
-  app.listen(env.port, () => {
-    console.log(`LMS API listening on http://localhost:${env.port}`);
-  });
-};
+import { app } from './express-app';
 
-start().catch((error) => {
-  console.error('Failed to start API', error);
-  process.exit(1);
-});
+// Keep a direct Express import in the entrypoint so Vercel can identify this
+// file as the Express application entrypoint.
+void express;
+
+export default app;

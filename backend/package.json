@@ -4,9 +4,9 @@
   "private": true,
   "description": "Loan Management System API",
   "scripts": {
-    "dev": "tsx watch src/server.ts",
+    "dev": "tsx watch src/local-server.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js",
+    "start": "node dist/src/local-server.js",
     "seed": "tsx scripts/seed.ts",
     "format": "prettier --write . --ignore-path .prettierignore",
     "format:check": "prettier --check . --ignore-path .prettierignore"
