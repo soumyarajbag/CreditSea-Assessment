@@ -78,7 +78,7 @@ export const createLoanApplication = async (borrowerId: string, amount: number, 
     });
     return toPublicLoan(loan);
   } catch (error) {
-    if (salarySlip) await removeStoredFile(salarySlip.deleteUrl);
+    if (salarySlip) await removeStoredFile(salarySlip.publicId);
     throw error;
   }
 };
@@ -95,8 +95,14 @@ export const getBorrowerSalarySlip = async (borrowerId: string) => {
 
   try {
     if (!loan.salarySlip.url) throw new Error('Hosted salary slip URL is missing.');
-    const content = await fetchStoredFile(loan.salarySlip.url);
-    return { content, mimeType: loan.salarySlip.mimeType };
+    const storedFile = await fetchStoredFile(loan.salarySlip.url);
+    const mimeType = storedFile.mimeType ?? loan.salarySlip.mimeType;
+
+    if (mimeType !== loan.salarySlip.mimeType) {
+      await LoanModel.updateOne({ _id: loan._id }, { $set: { 'salarySlip.mimeType': mimeType } });
+    }
+
+    return { content: storedFile.content, mimeType };
   } catch (error) {
     if (error instanceof AppError) throw error;
     throw new AppError(404, 'Salary slip preview is unavailable.', 'SALARY_SLIP_NOT_FOUND');
@@ -425,6 +431,6 @@ export const deleteNonFinancialLoanApplication = async (loanId: string) => {
   }).lean();
   if (!deletedLoan) throw new AppError(409, 'Loan changed while being deleted. Please retry.', 'DELETE_CONFLICT');
 
-  await removeStoredFile(deletedLoan.salarySlip.deleteUrl);
+  await removeStoredFile(deletedLoan.salarySlip.publicId);
   return { loanId: String(deletedLoan._id), status: deletedLoan.status };
 };

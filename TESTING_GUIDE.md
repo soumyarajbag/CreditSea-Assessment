@@ -9,11 +9,12 @@ This guide verifies the complete CreditSea journey: borrower onboarding, BRE fai
 - Node.js 18 or newer.
 - A reachable MongoDB deployment, local or Atlas.
 - A MongoDB database user with a valid connection string.
-- An ImgBB API key for salary-slip upload and protected preview testing.
+- Cloudinary cloud name, API key, and API secret for salary-slip upload and protected preview testing.
+- If using a Cloudinary free plan, enable **Allow delivery of PDF and ZIP files** in the product environment Security settings.
 - A PDF, JPG, or PNG salary slip smaller than 5 MB.
 - Two browser windows or profiles if you want to keep borrower and operations sessions open at the same time.
 
-Do not commit `backend/.env`, `frontend/.env.local`, database credentials, JWT secrets, or ImgBB keys. The repository keeps `.env.example` templates for both applications.
+Do not commit `backend/.env`, `frontend/.env.local`, database credentials, JWT secrets, or Cloudinary credentials. The repository keeps `.env.example` templates for both applications.
 
 ## 2. Configure the environment
 
@@ -28,10 +29,12 @@ MONGODB_URI=mongodb://127.0.0.1:27017/creditsea_lms
 JWT_SECRET=use-a-long-random-local-secret
 JWT_EXPIRES_IN=1d
 FRONTEND_URL=http://localhost:3000
-IMGBB_API_KEY=your-imgbb-api-key
+CLOUDINARY_CLOUD_NAME=your-cloudinary-cloud-name
+CLOUDINARY_API_KEY=your-cloudinary-api-key
+CLOUDINARY_API_SECRET=your-cloudinary-api-secret
 ```
 
-Salary slips are held in memory during the request and uploaded to ImgBB. They are not written to `backend/uploads`.
+Salary slips are held in memory during the request and uploaded to Cloudinary. They are not written to `backend/uploads`.
 
 For MongoDB Atlas, confirm that:
 
@@ -191,7 +194,7 @@ Run the following in order. Use a unique borrower account if the account already
 3. Confirm dates display as readable dates even though the API stores them as epoch milliseconds.
 4. Confirm the salary slip appears in the protected preview area.
 5. Open **Preview slip** and confirm the full PDF or image is shown in the modal.
-6. Confirm no hosted ImgBB management URL is displayed in the frontend.
+6. Confirm no hosted Cloudinary management URL or public ID is displayed in the frontend.
 
 ### Step E: approve or reject in Sanction
 
@@ -355,10 +358,10 @@ If this fails, check the backend terminal, `MONGODB_URI`, and whether port 5000 
 
 ### Salary-slip upload fails
 
-- Confirm `IMGBB_API_KEY` is present in `backend/.env`.
+- Confirm `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, and `CLOUDINARY_API_SECRET` are present in `backend/.env`.
 - Confirm the file is PDF, JPG, or PNG.
 - Confirm the file is 5 MB or smaller.
-- Confirm the backend can reach ImgBB.
+- Confirm the backend can reach Cloudinary.
 
 ### Frontend requests use the wrong path
 

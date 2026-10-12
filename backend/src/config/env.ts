@@ -17,5 +17,7 @@ export const env = {
   jwtSecret: required('JWT_SECRET', 'development-only-change-this-secret'),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? '1d',
   frontendUrl: process.env.FRONTEND_URL ?? 'http://localhost:3000',
-  imgbbApiKey: process.env.IMGBB_API_KEY ?? '',
+  cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME?.trim() ?? '',
+  cloudinaryApiKey: process.env.CLOUDINARY_API_KEY?.trim() ?? '',
+  cloudinaryApiSecret: process.env.CLOUDINARY_API_SECRET?.trim() ?? '',
 };

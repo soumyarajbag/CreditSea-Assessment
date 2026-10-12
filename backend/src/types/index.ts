@@ -11,7 +11,7 @@ export interface AuthUser {
 
 export interface SalarySlipMetadata {
   url: string;
-  deleteUrl?: string;
+  publicId: string;
   originalName: string;
   mimeType: string;
   sizeBytes: number;

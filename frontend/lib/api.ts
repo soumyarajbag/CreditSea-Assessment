@@ -1,5 +1,6 @@
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:5000/api/v1';
 const REQUEST_TIMEOUT_MS = 10000;
+const FILE_REQUEST_TIMEOUT_MS = 30000;
 
 export class ApiError extends Error {
   constructor(
@@ -13,9 +14,9 @@ export class ApiError extends Error {
   }
 }
 
-const fetchWithTimeout = async (url: string, options: RequestInit): Promise<Response> => {
+const fetchWithTimeout = async (url: string, options: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<Response> => {
   const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     return await fetch(url, { ...options, credentials: options.credentials ?? 'include', signal: options.signal ?? controller.signal });
@@ -51,7 +52,7 @@ export const apiFetch = async <T>(path: string, options: RequestInit = {}): Prom
 export const apiFetchBlob = async (path: string, options: RequestInit = {}): Promise<Blob> => {
   const headers = new Headers(options.headers);
 
-  const response = await fetchWithTimeout(`${API_BASE_URL}${path}`, { ...options, headers, cache: 'no-store' });
+  const response = await fetchWithTimeout(`${API_BASE_URL}${path}`, { ...options, headers, cache: 'no-store' }, FILE_REQUEST_TIMEOUT_MS);
   if (!response.ok) {
     const payload = (await response.json().catch(() => ({}))) as { message?: string; code?: string; errors?: unknown[] };
     throw new ApiError(payload.message ?? 'Unable to load file preview.', response.status, payload.code, payload.errors ?? []);

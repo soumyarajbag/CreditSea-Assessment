@@ -391,9 +391,10 @@ export const swaggerDocument = {
             code: 'BRE_FAILED',
             errors: ['Monthly salary must be at least INR 25,000.'],
           }),
-          503: errorResponse('ImgBB is not configured.', {
-            message: 'Image hosting is not configured. Add IMGBB_API_KEY to the backend environment.',
-            code: 'IMGBB_NOT_CONFIGURED',
+          503: errorResponse('Cloudinary is not configured.', {
+            message:
+              'Cloudinary is not configured. Add CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET to the backend environment.',
+            code: 'CLOUDINARY_NOT_CONFIGURED',
             errors: [],
           }),
         },
@@ -421,7 +422,8 @@ export const swaggerDocument = {
       get: {
         tags: ['Borrower'],
         summary: 'Preview the current salary slip',
-        description: 'Returns the latest borrower salary slip through the backend. The hosted ImgBB URL is not exposed to the browser.',
+        description:
+          'Returns the latest borrower salary slip through the backend. The hosted Cloudinary URL is not exposed to the browser.',
         operationId: 'getBorrowerSalarySlip',
         security: protectedRouteSecurity,
         responses: {

@@ -75,6 +75,7 @@ export default function BorrowerLoanPage() {
   const [loadingLoan, setLoadingLoan] = useState(true);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [salarySlipPreviewUrl, setSalarySlipPreviewUrl] = useState<string | null>(null);
+  const [salarySlipMimeType, setSalarySlipMimeType] = useState<string | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -105,11 +106,14 @@ export default function BorrowerLoanPage() {
           return;
         }
         previewUrl = nextPreviewUrl;
+        setSalarySlipMimeType(blob.type || loan.salarySlip?.mimeType || null);
         setSalarySlipPreviewUrl(nextPreviewUrl);
       })
-      .catch(() => {
+      .catch((requestError) => {
+        setSalarySlipMimeType(null);
         setSalarySlipPreviewUrl(null);
-        toast.error('Salary slip preview is unavailable.');
+        const message = requestError instanceof ApiError ? requestError.message : 'Salary slip preview is unavailable.';
+        toast.error(message);
       })
       .finally(() => setLoadingPreview(false));
 
@@ -131,6 +135,8 @@ export default function BorrowerLoanPage() {
       </AppShell>
     );
   }
+
+  const previewMimeType = salarySlipMimeType ?? loan?.salarySlip?.mimeType ?? '';
 
   return (
     <AppShell>
@@ -267,7 +273,7 @@ export default function BorrowerLoanPage() {
                   </div>
                   {salarySlipPreviewUrl && (
                     <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-500">
-                      {loan.salarySlip?.mimeType === 'application/pdf' ? 'PDF' : 'Image'}
+                      {previewMimeType === 'application/pdf' ? 'PDF' : 'Image'}
                     </span>
                   )}
                 </div>
@@ -277,7 +283,7 @@ export default function BorrowerLoanPage() {
                   <div className="group relative mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50">
                     <PreviewFrame
                       url={salarySlipPreviewUrl}
-                      mimeType={loan.salarySlip?.mimeType ?? ''}
+                      mimeType={previewMimeType}
                       className="pointer-events-none h-36 object-cover opacity-90 transition duration-500 group-hover:scale-[1.02]"
                     />
                     <button
@@ -311,11 +317,7 @@ export default function BorrowerLoanPage() {
               </DialogHeader>
               {salarySlipPreviewUrl && (
                 <div className="mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
-                  <PreviewFrame
-                    url={salarySlipPreviewUrl}
-                    mimeType={loan.salarySlip?.mimeType ?? ''}
-                    className="h-[min(68vh,720px)] object-contain"
-                  />
+                  <PreviewFrame url={salarySlipPreviewUrl} mimeType={previewMimeType} className="h-[min(68vh,720px)] object-contain" />
                 </div>
               )}
             </DialogContent>

@@ -172,7 +172,7 @@ Money values are rounded to two decimal places. The frontend updates the calcula
 
 - Accepted formats: PDF, JPG, and PNG.
 - Maximum size: 5 MB.
-- The backend receives the file in memory and uploads it to ImgBB.
+- The backend receives the file in memory and uploads it to Cloudinary.
 - The loan stores the hosted URL and file metadata.
 - The public loan response exposes file metadata but not the hosted management URLs.
 - A borrower can request a protected inline preview through the backend.

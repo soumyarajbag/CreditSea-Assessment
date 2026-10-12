@@ -11,7 +11,7 @@ The project is organized as one repository containing two independently runnable
 
 - Borrower signup, login, profile completion, and current-loan tracking.
 - Server-side business rule engine (BRE) for age, salary, PAN, and employment mode.
-- Salary-slip upload with PDF/JPG/PNG validation, ImgBB storage, and protected preview.
+- Salary-slip upload with PDF/JPG/PNG validation, Cloudinary storage, and protected preview.
 - Fixed 12% simple-interest calculation with amount and tenure limits.
 - Role-specific Sales, Sanction, Disbursement, and Collection workspaces.
 - Approval, rejection with reason, disbursement, partial repayment, and automatic closure.
@@ -31,7 +31,7 @@ flowchart LR
     API --> Auth["JWT + RBAC<br/>HttpOnly cookie / Bearer"]
     API --> Services["Domain services<br/>Eligibility, loans, payments, files"]
     Services --> Mongo["MongoDB<br/>Mongoose models"]
-    Services --> ImgBB["ImgBB<br/>Salary-slip hosting"]
+    Services --> Cloudinary["Cloudinary<br/>Salary-slip hosting"]
 ```
 
 ### Request and responsibility boundaries
@@ -127,7 +127,7 @@ Role permissions are enforced in the API. Directly opening a role-owned frontend
 | Persistence | MongoDB with Mongoose 8 |
 | Validation | Zod, Mongoose validation, browser constraint validation |
 | Authentication | JWT, bcryptjs, HttpOnly cookie sessions, optional Bearer header |
-| File handling | Multer memory storage, ImgBB upload and protected proxy preview |
+| File handling | Multer memory storage, Cloudinary upload and protected proxy preview |
 | API documentation | OpenAPI 3.0.3 with Swagger UI |
 
 The frontend uses React Context for global authentication and toast state. Form, table, search, pagination, and modal state remains local to the relevant page/module; Redux or Zustand is not required for the current scope.
@@ -168,7 +168,8 @@ Generated dependencies, build output, logs, Vercel metadata, and local environme
 
 - Node.js 18 or newer.
 - MongoDB running locally or a reachable MongoDB connection string.
-- ImgBB API key for salary-slip upload and preview.
+- Cloudinary cloud name, API key, and API secret for salary-slip upload and preview.
+- For Cloudinary free plans, enable **Allow delivery of PDF and ZIP files** in the product environment Security settings so PDF previews can be delivered.
 
 ### 1. Configure and start the backend
 
@@ -187,7 +188,9 @@ MONGODB_URI=mongodb://127.0.0.1:27017/creditsea_lms
 JWT_SECRET=replace-with-a-long-local-secret
 JWT_EXPIRES_IN=1d
 FRONTEND_URL=http://localhost:3000
-IMGBB_API_KEY=replace-with-your-imgbb-api-key
+CLOUDINARY_CLOUD_NAME=replace-with-your-cloudinary-cloud-name
+CLOUDINARY_API_KEY=replace-with-your-cloudinary-api-key
+CLOUDINARY_API_SECRET=replace-with-your-cloudinary-api-secret
 ```
 
 Then seed the local roles and start the API:
@@ -344,6 +347,6 @@ For the full manual test plan, including BRE pass/fail, complete lifecycle, sear
 
 ## Deployment note
 
-The frontend and backend share a repository but are separate applications. A frontend deployment host serves the Next.js app; the Express backend needs its own Node-capable service or an explicit serverless adaptation. Set `NEXT_PUBLIC_API_URL` to the deployed API's `/api/v1` base and configure the backend `FRONTEND_URL`, MongoDB, ImgBB, JWT secret, CORS, and production cookie settings for the chosen domains.
+The frontend and backend share a repository but are separate applications. A frontend deployment host serves the Next.js app; the Express backend needs its own Node-capable service or an explicit serverless adaptation. Set `NEXT_PUBLIC_API_URL` to the deployed API's `/api/v1` base and configure the backend `FRONTEND_URL`, MongoDB, Cloudinary credentials, JWT secret, CORS, and production cookie settings for the chosen domains.
 
 The current architecture does not automatically expose the Express server at `frontend-host/api/v1`; that requires a deliberate reverse proxy, rewrite, or serverless deployment configuration.

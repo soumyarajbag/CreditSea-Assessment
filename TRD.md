@@ -21,7 +21,7 @@ Express API
   v
 MongoDB via Mongoose
 
-Express API ----> ImgBB
+Express API ----> Cloudinary
                   salary-slip hosting and retrieval
 ```
 
@@ -36,7 +36,7 @@ The frontend is responsible for presentation, local form state, browser-level va
 | Database | MongoDB with Mongoose 8 |
 | Authentication | JWT, bcryptjs, HttpOnly cookie; Bearer token accepted as an API compatibility fallback |
 | Validation | Zod request schemas, Mongoose model validation, browser constraint validation |
-| File handling | Multer memory storage, ImgBB upload and proxy preview |
+| File handling | Multer memory storage, Cloudinary upload and proxy preview |
 | Security middleware | Helmet, CORS with credentials, request size limit |
 | UI feedback | Shared toast provider, inline errors, loaders, empty states, bottom-right format tooltips |
 
@@ -91,7 +91,9 @@ MONGODB_URI=mongodb://127.0.0.1:27017/creditsea_lms
 JWT_SECRET=replace-with-a-long-local-secret
 JWT_EXPIRES_IN=1d
 FRONTEND_URL=http://localhost:3000
-IMGBB_API_KEY=replace-with-your-imgbb-api-key
+CLOUDINARY_CLOUD_NAME=replace-with-your-cloudinary-cloud-name
+CLOUDINARY_API_KEY=replace-with-your-cloudinary-api-key
+CLOUDINARY_API_SECRET=replace-with-your-cloudinary-api-secret
 ```
 
 The backend also provides development fallbacks for MongoDB, JWT secret, port, frontend URL, and JWT lifetime. A real deployment must provide explicit secrets and service configuration.
@@ -102,7 +104,7 @@ The backend also provides development fallbacks for MongoDB, JWT secret, port, f
 NEXT_PUBLIC_API_URL=http://localhost:5000/api/v1
 ```
 
-Only the API base URL is exposed to the browser. Secrets, including the ImgBB key and JWT secret, remain backend-only.
+Only the API base URL is exposed to the browser. Secrets, including the Cloudinary credentials and JWT secret, remain backend-only.
 
 ## 5. API application behavior
 
@@ -214,7 +216,7 @@ All application-managed MongoDB schemas use `versionKey: false`. Date/time value
   rejectionReason?: string,
   salarySlip: {
     url: string,
-    deleteUrl?: string,
+    publicId: string,
     originalName: string,
     mimeType: 'application/pdf' | 'image/jpeg' | 'image/png',
     sizeBytes: number
@@ -344,7 +346,7 @@ image/jpeg
 image/png
 ```
 
-The file service uploads the bytes to ImgBB with a 30-second timeout. It stores the hosted URL, optional deletion URL, original filename, MIME type, and byte size on the loan. Salary-slip preview requests retrieve the hosted file through the backend and return it inline with its original MIME type.
+The file service uploads the bytes to Cloudinary with a 30-second timeout using a signed server-side upload. It stores the secure delivery URL, Cloudinary public ID, original filename, MIME type, and byte size on the loan. Salary-slip preview requests retrieve the hosted file through the backend and return it inline with its original MIME type. Loan deletion performs best-effort cleanup through Cloudinary's destroy API.
 
 ## 11. REST API contract
 
@@ -548,5 +550,5 @@ cd ../frontend && npm run build
 ## 16. Known technical boundaries
 
 - Payment recording uses an atomic conditional loan update plus compensating rollback rather than a MongoDB multi-document transaction. The unique UTR index and state checks are required for integrity.
-- ImgBB is the current external file host; a production deployment may replace it with managed object storage without changing the borrower-facing contract.
+- Cloudinary is the current external file host. The borrower-facing contract exposes only protected backend preview access, so the provider can be replaced behind the file service if required.
 - The system currently has no scheduled jobs, notification worker, repayment schedule engine, or configurable lending-product catalog.
