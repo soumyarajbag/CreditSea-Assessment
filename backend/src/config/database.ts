@@ -40,6 +40,7 @@ const migrateLegacyDatabaseValues = async (): Promise<void> => {
     ['__v', 'salarySlip.__v'],
   );
   await migrateLegacyCollection(PaymentModel.collection, ['paymentDate', 'createdAt', 'updatedAt'], ['__v']);
+  await UserModel.updateMany({ emailVerified: { $exists: false } }, { $set: { emailVerified: true } });
 };
 
 export const connectDatabase = async (): Promise<void> => {

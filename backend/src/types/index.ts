@@ -22,6 +22,9 @@ export interface UserDocument {
   email: string;
   passwordHash: string;
   role: Role;
+  emailVerified: boolean;
+  emailVerificationTokenHash?: string;
+  emailVerificationExpiresAt?: EpochTimestamp;
   fullName?: string;
   pan?: string;
   dateOfBirth?: EpochTimestamp;
@@ -43,6 +46,9 @@ export interface LoanDocument {
   totalPaid: number;
   status: LoanStatus;
   rejectionReason?: string;
+  reviewComment?: string;
+  reviewRequestedBy?: Types.ObjectId;
+  reviewRequestedAt?: EpochTimestamp;
   salarySlip: SalarySlipMetadata;
   sanctionedBy?: Types.ObjectId;
   sanctionedAt?: EpochTimestamp;

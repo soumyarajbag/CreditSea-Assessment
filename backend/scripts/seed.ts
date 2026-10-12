@@ -19,7 +19,10 @@ const run = async (): Promise<void> => {
   for (const seedUser of seedUsers) {
     await UserModel.updateOne(
       { email: seedUser.email },
-      { $set: { ...seedUser, passwordHash, profileCompleted: false } },
+      {
+        $set: { ...seedUser, passwordHash, profileCompleted: false, emailVerified: true },
+        $unset: { emailVerificationTokenHash: 1, emailVerificationExpiresAt: 1 },
+      },
       { upsert: true },
     );
   }
