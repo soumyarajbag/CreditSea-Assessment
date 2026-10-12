@@ -15,8 +15,8 @@ const userSchema = new Schema<UserDocument>(
     monthlySalary: { type: Number, min: 0 },
     employmentMode: { type: String, enum: Object.values(EmploymentMode) },
     profileCompleted: { type: Boolean, default: false },
-    createdAt: { type: Number, required: true },
-    updatedAt: { type: Number, required: true },
+    createdAt: { type: Number, required: true, default: nowEpoch },
+    updatedAt: { type: Number, required: true, default: nowEpoch },
   },
   { timestamps: { currentTime: nowEpoch }, versionKey: false },
 );

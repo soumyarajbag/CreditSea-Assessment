@@ -7,7 +7,7 @@ import { nowEpoch } from '../utils/epoch';
 const salarySlipSchema = new Schema(
   {
     url: { type: String, required: true, trim: true },
-    deleteUrl: { type: String, trim: true },
+    publicId: { type: String, required: true, trim: true },
     originalName: { type: String, required: true },
     mimeType: { type: String, enum: ALLOWED_SALARY_SLIP_MIME_TYPES, required: true },
     sizeBytes: { type: Number, required: true, min: 1 },
@@ -32,8 +32,8 @@ const loanSchema = new Schema<LoanDocument>(
     disbursedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     disbursedAt: { type: Number },
     closedAt: { type: Number },
-    createdAt: { type: Number, required: true },
-    updatedAt: { type: Number, required: true },
+    createdAt: { type: Number, required: true, default: nowEpoch },
+    updatedAt: { type: Number, required: true, default: nowEpoch },
   },
   { timestamps: { currentTime: nowEpoch }, versionKey: false },
 );
