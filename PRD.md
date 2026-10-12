@@ -31,14 +31,14 @@ CreditSea is designed around a single, traceable loan lifecycle. Each stage has 
 
 ## 3. Users and responsibilities
 
-| User | Product responsibility | Available workspace |
-|---|---|---|
-| Borrower | Create an account, complete personal details, pass the business rules engine, submit a loan, and monitor repayment status | Borrower application and My loan |
-| Sales executive | Follow up with registered borrowers who have not submitted an application | Sales / Open leads |
-| Sanction executive | Review applied loans and approve or reject them with a reason | Sanction / Pending review and Decision history |
-| Disbursement executive | Release approved loans and review released-loan history | Disbursement / Pending disbursement and Disbursement history |
-| Collection executive | Record repayments and review payment history | Collection / Pending repayments and Payment history |
-| Administrator | Work across sales, sanction, disbursement, and collection modules | All operations modules |
+| User                   | Product responsibility                                                                                                    | Available workspace                                          |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Borrower               | Create an account, complete personal details, pass the business rules engine, submit a loan, and monitor repayment status | Borrower application and My loan                             |
+| Sales executive        | Follow up with registered borrowers who have not submitted an application                                                 | Sales / Open leads                                           |
+| Sanction executive     | Review applied loans and approve or reject them with a reason                                                             | Sanction / Pending review and Decision history               |
+| Disbursement executive | Release approved loans and review disbursement history, including read-only loans returned to Sanction                    | Disbursement / Pending disbursement and Disbursement history |
+| Collection executive   | Record repayments and review payment history                                                                              | Collection / Pending repayments and Payment history          |
+| Administrator          | Work across sales, sanction, disbursement, and collection modules                                                         | All operations modules                                       |
 
 The API is the source of truth for access control. Hiding a navigation item in the frontend does not grant or remove permission by itself.
 
@@ -47,6 +47,8 @@ The API is the source of truth for access control. Hiding a navigation item in t
 ### 4.1 Account access
 
 - Public borrower signup with email and password.
+- Signup sends a branded email verification link to the entered email address; the borrower must verify it before the first login.
+- Borrowers can request a fresh verification link when the original expires or is not received.
 - Login and logout for borrowers and operations users.
 - Passwords are stored as bcrypt hashes.
 - Authenticated sessions use a JWT in an HttpOnly cookie.
@@ -72,7 +74,9 @@ When a borrower saves a new name, the returned profile is merged into the authen
 - The frontend validates the file type and size before upload; the backend validates it again.
 - The final application is submitted as multipart form data.
 - A successful application is created with `APPLIED` status.
-- The borrower can view the current loan, calculations, status, balance, and a protected salary-slip preview.
+- The borrower can view the latest loan, calculations, status, balance, protected salary-slip preview, and the complete history of active, rejected, and closed loans.
+- Rejection comments and sanction-review comments are visible to the borrower.
+- `REJECTED` applications do not block a new application, allowing the borrower to correct the issue and apply again.
 
 ### 4.4 Operations workspaces
 
@@ -82,6 +86,8 @@ Operations screens are role-aware and provide:
 - Search across borrower name, email, PAN, and a complete loan ID; collection views also support payment UTR search.
 - Empty, loading, inline error, and success states.
 - Sanction, disbursement, and collection history views where applicable.
+- Sanction review handbacks and disbursement rejections with mandatory borrower-facing comments.
+- Disbursement history includes `SANCTION_REVIEW` records for visibility, comments, and salary-slip review only; status-changing actions are available only for `SANCTIONED` records in Pending disbursement.
 - Status filters for historical records.
 - One primary action per actionable loan.
 - Toast feedback for successful actions and API failures.
@@ -90,13 +96,15 @@ Operations screens are role-aware and provide:
 Administrators also have controlled cleanup actions:
 
 - Delete a borrower account only when the borrower has no loan history.
-- Delete an `APPLIED` or `REJECTED` loan application only when it has no payment history.
+- Delete an `APPLIED`, `SANCTION_REVIEW`, or `REJECTED` loan application only when it has no payment history.
 - Financial records that are `DISBURSED` or `CLOSED` cannot be deleted.
 - These actions are exposed in a dedicated, collapsed Administrator controls section at the end of the dashboard and require confirmation before submission.
 
 ### 4.5 Repayment tracking
 
 Collection users can record one or more payments against a disbursed loan. The interface shows total repayment, total paid, and outstanding balance. When a payment exactly clears the balance, the system changes the loan to `CLOSED` automatically.
+
+The payment form limits the amount to the current outstanding balance and gives an inline error before submission when the limit is exceeded. UTR values are normalized to uppercase, validated against the format rule, and must be globally unique. A duplicate UTR returns a clear conflict error and preserves the entered payment fields.
 
 ## 5. End-to-end loan journey
 
@@ -122,7 +130,12 @@ Salary slip + loan configuration submitted
   SANCTIONED        REJECTED
        |
        v
-  DISBURSED
+  Disbursement decision
+     /          |          \
+    v           v           v
+DISBURSED  SANCTION_REVIEW  REJECTED
+                  |
+                  +--> Sanctioner approves or rejects
        |
        v
   Payments recorded
@@ -139,13 +152,13 @@ Salary slip + loan configuration submitted
 
 All rules are evaluated by the backend. The frontend may provide browser-level feedback, but the backend result controls whether an application can be created.
 
-| Field | Rule |
-|---|---|
-| Age | The borrower must be 23 through 50 years old, inclusive. Age is calculated from the date of birth and the current date. |
-| Date of birth | Required, valid, and not in the future. |
-| Monthly salary | Must be at least INR 25,000. |
-| PAN | After trimming and uppercasing, must match `^[A-Z]{5}[0-9]{4}[A-Z]$`. Example: `ABCDE1234F`. |
-| Employment mode | `SALARIED` or `SELF_EMPLOYED` is allowed. `UNEMPLOYED` is not eligible. |
+| Field           | Rule                                                                                                                    |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Age             | The borrower must be 23 through 50 years old, inclusive. Age is calculated from the date of birth and the current date. |
+| Date of birth   | Required, valid, and not in the future.                                                                                 |
+| Monthly salary  | Must be at least INR 25,000.                                                                                            |
+| PAN             | After trimming and uppercasing, must match `^[A-Z]{5}[0-9]{4}[A-Z]$`. Example: `ABCDE1234F`.                            |
+| Employment mode | `SALARIED` or `SELF_EMPLOYED` is allowed. `UNEMPLOYED` is not eligible.                                                 |
 
 The PAN information button explains: "Use 10 characters: 5 uppercase letters, 4 digits, then 1 uppercase letter. Example: ABCDE1234F."
 
@@ -153,10 +166,10 @@ Saving an ineligible profile is allowed so the borrower can see the complete lis
 
 ### 6.2 Loan configuration and calculation
 
-| Field | Rule |
-|---|---|
-| Amount | INR 50,000 through INR 5,00,000, inclusive. |
-| Tenure | 30 through 365 days, inclusive. |
+| Field         | Rule                                                    |
+| ------------- | ------------------------------------------------------- |
+| Amount        | INR 50,000 through INR 5,00,000, inclusive.             |
+| Tenure        | 30 through 365 days, inclusive.                         |
 | Interest rate | Fixed at 12% per annum for the current product release. |
 
 The simple-interest calculation is:
@@ -180,15 +193,18 @@ Money values are rounded to two decimal places. The frontend updates the calcula
 
 ### 6.4 Loan status transitions
 
-| Transition | Owner | Required behavior |
-|---|---|---|
-| Create `APPLIED` | Borrower | Profile passes the BRE, a valid salary slip is present, and amount/tenure are valid. |
-| `APPLIED` -> `SANCTIONED` | Sanction / Admin | Approve the application and record the decision user and time. |
-| `APPLIED` -> `REJECTED` | Sanction / Admin | Reject the application and provide a reason. |
-| `SANCTIONED` -> `DISBURSED` | Disbursement / Admin | Mark the funds as released and record the operator and time. |
-| `DISBURSED` -> `CLOSED` | System | Set automatically when the rounded paid amount equals the repayment total. |
+| Transition                                   | Owner                | Required behavior                                                                     |
+| -------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------- |
+| Create `APPLIED`                             | Borrower             | Profile passes the BRE, a valid salary slip is present, and amount/tenure are valid.  |
+| `APPLIED` -> `SANCTIONED`                    | Sanction / Admin     | Approve the application and record the decision user and time.                        |
+| `SANCTION_REVIEW` -> `SANCTIONED`            | Sanction / Admin     | Re-approve the application after reviewing the handback comment.                      |
+| `APPLIED` or `SANCTION_REVIEW` -> `REJECTED` | Sanction / Admin     | Reject the application with a borrower-visible reason.                                |
+| `SANCTIONED` -> `DISBURSED`                  | Disbursement / Admin | Mark the funds as released and record the operator and time.                          |
+| `SANCTIONED` -> `SANCTION_REVIEW`            | Disbursement / Admin | Send the loan back to sanction with a borrower-visible review comment.                |
+| `SANCTIONED` -> `REJECTED`                   | Disbursement / Admin | Finally reject the loan with a borrower-visible reason; the borrower may apply again. |
+| `DISBURSED` -> `CLOSED`                      | System               | Set automatically when the rounded paid amount equals the repayment total.            |
 
-Only `APPLIED`, `SANCTIONED`, and `DISBURSED` block another application for the same borrower. `REJECTED` and `CLOSED` loans do not block a new application.
+Only `APPLIED`, `SANCTION_REVIEW`, `SANCTIONED`, and `DISBURSED` block another application for the same borrower. `REJECTED` and `CLOSED` loans do not block a new application.
 
 Invalid or repeated transitions are rejected by the backend.
 
@@ -210,6 +226,8 @@ The UTR is normalized to uppercase and must match:
 This allows 6 to 30 letters and digits with optional single hyphens between groups. The UTR information button explains: "Use 6-30 characters with letters or digits. Hyphens are allowed between groups. Example: DEMO-UTR-001."
 
 A payment greater than the current outstanding balance is rejected. The collection interface uses the current outstanding amount as the maximum input value and the backend performs the final check.
+
+Duplicate UTRs are rejected with a conflict response; both the pre-check and the database unique index protect against duplicate references, including concurrent submissions.
 
 ## 7. User experience requirements
 
@@ -284,6 +302,7 @@ The product release is considered healthy when:
 - A borrower can sign up, complete the profile, see a BRE failure, correct the details, pass the BRE, select a valid salary slip, and submit a loan.
 - Sanction can approve or reject an applied loan, and rejection requires a reason.
 - Disbursement can release a sanctioned loan.
+- Disbursement can view returned `SANCTION_REVIEW` records without exposing status-changing actions for them.
 - Collection can record a partial payment, see the reduced balance, and record the exact final balance.
 - The final payment automatically changes the loan to `CLOSED` with zero outstanding balance.
 - Duplicate UTRs, overpayments, invalid files, invalid fields, and invalid transitions are rejected.

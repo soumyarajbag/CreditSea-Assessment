@@ -29,16 +29,17 @@ The frontend is responsible for presentation, local form state, browser-level va
 
 ## 2. Technology baseline
 
-| Area | Implementation |
-|---|---|
-| Frontend | Next.js 14 App Router, React 18, TypeScript, Tailwind CSS |
-| Backend | Node.js, Express 4, TypeScript |
-| Database | MongoDB with Mongoose 8 |
-| Authentication | JWT, bcryptjs, HttpOnly cookie; Bearer token accepted as an API compatibility fallback |
-| Validation | Zod request schemas, Mongoose model validation, browser constraint validation |
-| File handling | Multer memory storage, Cloudinary upload and proxy preview |
-| Security middleware | Helmet, CORS with credentials, request size limit |
-| UI feedback | Shared toast provider, inline errors, loaders, empty states, bottom-right format tooltips |
+| Area                | Implementation                                                                            |
+| ------------------- | ----------------------------------------------------------------------------------------- |
+| Frontend            | Next.js 14 App Router, React 18, TypeScript, Tailwind CSS                                 |
+| Backend             | Node.js, Express 4, TypeScript                                                            |
+| Database            | MongoDB with Mongoose 8                                                                   |
+| Authentication      | JWT, bcryptjs, HttpOnly cookie; Bearer token accepted as an API compatibility fallback    |
+| Validation          | Zod request schemas, Mongoose model validation, browser constraint validation             |
+| File handling       | Multer memory storage, Cloudinary upload and proxy preview                                |
+| Security middleware | Helmet, CORS with credentials, request size limit                                         |
+| UI feedback         | Shared toast provider, inline errors, loaders, empty states, bottom-right format tooltips |
+| Containerization    | Multi-stage Dockerfiles for backend/frontend and Docker Compose for local orchestration   |
 
 Default local ports are frontend `3000` and backend `5000`.
 
@@ -58,12 +59,13 @@ Default local ports are frontend `3000` and backend `5000`.
 |     |- services/        auth, eligibility, file, loan, and payment behavior
 |     |- types/           domain and Express request types
 |     |- utils/           epoch, pagination, public serializers, and money rounding
-|     `- app.ts/server.ts
+|     `- express-app.ts, local-server.ts, server.ts
 |- frontend/
 |  |- app/
 |  |  |- page.tsx
 |  |  |- login/page.tsx
 |  |  |- signup/page.tsx
+|  |  |- verify-email/page.tsx
 |  |  |- borrower/apply/page.tsx
 |  |  |- borrower/loan/page.tsx
 |  |  |- dashboard/page.tsx
@@ -76,7 +78,6 @@ Default local ports are frontend `3000` and backend `5000`.
 |- TRD.md
 |- README.md
 |- TESTING_GUIDE.md
-`- VIDEO_DEMO_GUIDE.md
 ```
 
 Controllers are intentionally thin. Business rules live in services and are repeated at the final server boundary even when the frontend has already validated the same field.
@@ -86,11 +87,20 @@ Controllers are intentionally thin. Business rules live in services and are repe
 ### Backend `.env`
 
 ```env
+NODE_ENV=development
 PORT=5000
 MONGODB_URI=mongodb://127.0.0.1:27017/creditsea_lms
 JWT_SECRET=replace-with-a-long-local-secret
 JWT_EXPIRES_IN=1d
 FRONTEND_URL=http://localhost:3000
+EMAIL_VERIFICATION_URL=http://localhost:3000/verify-email
+EMAIL_VERIFICATION_EXPIRES_HOURS=24
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-smtp-username
+SMTP_PASSWORD=your-smtp-password
+SMTP_FROM="CreditSea <no-reply@example.com>"
 CLOUDINARY_CLOUD_NAME=replace-with-your-cloudinary-cloud-name
 CLOUDINARY_API_KEY=replace-with-your-cloudinary-api-key
 CLOUDINARY_API_SECRET=replace-with-your-cloudinary-api-secret
@@ -118,6 +128,8 @@ The Express application:
 6. Serves OpenAPI documentation at `/api-docs` and `/api-docs.json`.
 7. Normalizes unknown routes and errors through centralized middleware.
 
+Authentication signup generates a random verification token, stores only its SHA-256 hash with an epoch expiry, and sends the token through Nodemailer as a branded HTML email. Verification consumes the token once. Login rejects accounts whose `emailVerified` flag is false. Existing users without the new field are marked verified by the database migration for backward compatibility; seeded demo users are always verified.
+
 The frontend API client sends credentials by default, disables caching for application requests, applies a 10-second timeout, and converts non-2xx responses into `ApiError` instances.
 
 ### Interactive API documentation
@@ -127,7 +139,7 @@ The backend exposes an OpenAPI 3.0.3 contract served from `backend/src/config/sw
 - Swagger UI: `GET /api-docs`
 - Raw specification: `GET /api-docs.json`
 - Swagger UI keeps authorization state for the current browser session and enables Try it out by default.
-- `POST /api/v1/auth/signup` and `POST /api/v1/auth/login` document and set the `creditsea_access_token` HttpOnly cookie.
+- `POST /api/v1/auth/signup` documents email verification and does not set a session cookie; `POST /api/v1/auth/verify-email` consumes the token; `POST /api/v1/auth/login` sets the `creditsea_access_token` HttpOnly cookie after verification.
 - Protected operations declare both `cookieAuth` and `bearerAuth`. Cookie authentication is the normal browser flow; Bearer authentication is the compatibility option for API clients.
 - Request schemas document the PAN and UTR patterns, epoch-millisecond timestamp format, amount and tenure bounds, file limits, pagination parameters, status filters, and required rejection reasons.
 - Responses include examples for successful reads/writes, validation failures, authorization failures, conflicts, missing resources, and external file-hosting errors.
@@ -173,7 +185,7 @@ BORROWER
 
 ### 6.3 Frontend session behavior
 
-`AuthProvider` loads `/auth/me` on startup, stores the public user in React state, and exposes login, signup, logout, and `updateUser` actions. Profile saves merge the returned borrower fields into this state so the AppShell navbar updates immediately. The AppShell provides authenticated navigation and logout handling; direct role mismatches render `UnauthorizedState`, while unknown paths render the global `not-found.tsx` page.
+`AuthProvider` loads `/auth/me` on startup, stores the public user in React state, and exposes login, signup, resend-verification, logout, and `updateUser` actions. Signup intentionally leaves the user unauthenticated and renders the verification-inbox state. The `/verify-email` page consumes the email token and links the borrower to login. Profile saves merge the returned borrower fields into this state so the AppShell navbar updates immediately. The AppShell provides authenticated navigation and logout handling; direct role mismatches render `UnauthorizedState`, while unknown paths render the global `not-found.tsx` page.
 
 ## 7. Data model
 
@@ -187,6 +199,9 @@ All application-managed MongoDB schemas use `versionKey: false`. Date/time value
   email: string,                  // unique, lowercased, trimmed
   passwordHash: string,           // select: false
   role: 'ADMIN' | 'SALES' | 'SANCTION' | 'DISBURSEMENT' | 'COLLECTION' | 'BORROWER',
+  emailVerified: boolean,
+  emailVerificationTokenHash?: string, // select: false, SHA-256 token hash
+  emailVerificationExpiresAt?: number, // epoch milliseconds, select: false
   fullName?: string,
   pan?: string,                   // stored uppercase
   dateOfBirth?: number,           // epoch milliseconds
@@ -212,8 +227,9 @@ All application-managed MongoDB schemas use `versionKey: false`. Date/time value
   simpleInterest: number,
   totalRepayment: number,
   totalPaid: number,
-  status: 'APPLIED' | 'SANCTIONED' | 'REJECTED' | 'DISBURSED' | 'CLOSED',
+  status: 'APPLIED' | 'SANCTION_REVIEW' | 'SANCTIONED' | 'REJECTED' | 'DISBURSED' | 'CLOSED',
   rejectionReason?: string,
+  reviewComment?: string,
   salarySlip: {
     url: string,
     publicId: string,
@@ -225,6 +241,8 @@ All application-managed MongoDB schemas use `versionKey: false`. Date/time value
   sanctionedAt?: number,
   disbursedBy?: ObjectId,
   disbursedAt?: number,
+  reviewRequestedBy?: ObjectId,
+  reviewRequestedAt?: number,
   closedAt?: number,
   createdAt: number,
   updatedAt: number
@@ -237,7 +255,7 @@ Indexes:
 - `status` for work queues.
 - Compound `{ status: 1, createdAt: -1 }` for ordered queues.
 
-The service blocks a new application when the borrower has an `APPLIED`, `SANCTIONED`, or `DISBURSED` loan.
+The service blocks a new application when the borrower has an `APPLIED`, `SANCTION_REVIEW`, `SANCTIONED`, or `DISBURSED` loan. `REJECTED` and `CLOSED` records remain available in borrower history but do not block a new application.
 
 ### 7.3 `payments`
 
@@ -293,8 +311,8 @@ This keeps existing data compatible with the numeric timestamp and no-version-ke
 ### 9.1 Shared constants
 
 ```ts
-PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/
-UTR_REGEX = /^(?=.{6,30}$)[A-Z0-9]+(?:-[A-Z0-9]+)*$/
+PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+UTR_REGEX = /^(?=.{6,30}$)[A-Z0-9]+(?:-[A-Z0-9]+)*$/;
 ```
 
 The constants are shared by backend validation and the eligibility service. The frontend keeps equivalent regexes and help text for browser validation and guidance.
@@ -328,13 +346,13 @@ Loan values are validated before calculation: amount `50000..500000`, tenure `30
 The payment workflow is:
 
 1. Load a loan whose status is `DISBURSED`.
-2. Check the UTR for an existing payment.
+2. Normalize the UTR to uppercase and check for an existing payment.
 3. Calculate the rounded outstanding balance.
 4. Reject a non-positive amount or overpayment through request/model validation and service checks.
 5. Atomically update the loan only when its status and previous `totalPaid` still match.
 6. Set `CLOSED` and `closedAt` when the new paid total equals the repayment total.
 7. Create the payment record with `toEpoch(paymentDate)`.
-8. If payment creation fails, restore the loan's previous paid amount and disbursed status. MongoDB's unique UTR index remains the final duplicate-protection layer.
+8. If payment creation fails, restore the loan's previous paid amount and disbursed status. MongoDB's unique UTR index remains the final duplicate-protection layer, and a duplicate-key race is converted to `409 DUPLICATE_UTR` with a field-level `utr` error.
 
 ## 10. File handling
 
@@ -366,64 +384,69 @@ Successful responses use the resource-specific JSON described below. Errors are 
 
 Validation errors may contain objects with `field` and `message`. The main status mappings are:
 
-| Status | Meaning |
-|---:|---|
-| 200 | Successful read or update |
-| 201 | Successful creation |
-| 204 | Successful logout with no response body |
-| 401 | Missing, invalid, or expired authentication |
-| 403 | Authenticated user lacks the required role or module access |
-| 404 | Resource or route not found |
-| 409 | Duplicate value, active-loan conflict, or invalid state transition |
-| 422 | Invalid input, failed BRE, file validation, overpayment, or invalid pagination |
-| 502/503/504 | External salary-slip hosting failure |
-| 500 | Unexpected server failure |
+|      Status | Meaning                                                                        |
+| ----------: | ------------------------------------------------------------------------------ |
+|         200 | Successful read or update                                                      |
+|         201 | Successful creation                                                            |
+|         204 | Successful logout with no response body                                        |
+|         401 | Missing, invalid, or expired authentication                                    |
+|         403 | Authenticated user lacks the required role or module access                    |
+|         404 | Resource or route not found                                                    |
+|         409 | Duplicate value, active-loan conflict, or invalid state transition             |
+|         422 | Invalid input, failed BRE, file validation, overpayment, or invalid pagination |
+| 502/503/504 | External salary-slip hosting or email-provider failure                         |
+|         500 | Unexpected server failure                                                      |
 
 ### 11.2 Authentication routes
 
-| Method | Route | Access | Behavior |
-|---|---|---|---|
-| POST | `/auth/signup` | Public | Validates email/password, creates a borrower, sets the auth cookie, returns `{ user }`. |
-| POST | `/auth/login` | Public | Verifies credentials, sets the auth cookie, returns `{ user }`. |
-| POST | `/auth/logout` | Public | Clears the auth cookie and returns `204`. |
-| GET | `/auth/me` | Authenticated | Returns the current public user. |
+| Method | Route                       | Access        | Behavior                                                                                                                                    |
+| ------ | --------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/auth/signup`              | Public        | Validates email/password, creates an unverified borrower, sends the HTML verification email, and returns `{ email, verificationRequired }`. |
+| POST   | `/auth/verify-email`        | Public        | Consumes a single-use verification token and activates the email address.                                                                   |
+| POST   | `/auth/resend-verification` | Public        | Sends a replacement verification link for an unverified account with a generic response.                                                    |
+| POST   | `/auth/login`               | Public        | Verifies credentials, sets the auth cookie, returns `{ user }`.                                                                             |
+| POST   | `/auth/logout`              | Public        | Clears the auth cookie and returns `204`.                                                                                                   |
+| GET    | `/auth/me`                  | Authenticated | Returns the current public user.                                                                                                            |
 
 ### 11.3 Borrower routes
 
-| Method | Route | Access | Behavior |
-|---|---|---|---|
-| GET | `/borrower/profile` | Borrower | Returns `{ profile, eligibility }`. |
-| PUT | `/borrower/profile` | Borrower | Validates and saves profile fields, returns `{ profile, eligibility }`. |
-| POST | `/borrower/loans/apply` | Borrower | Accepts multipart `salarySlip`, `amount`, and `tenureDays`; reruns eligibility and creates an `APPLIED` loan. |
-| GET | `/borrower/loans/current` | Borrower | Returns the borrower's latest loan with financial summary and public salary-slip metadata. |
-| GET | `/borrower/loans/current/salary-slip` | Borrower | Retrieves the latest salary slip through an authenticated inline response. |
+| Method | Route                                 | Access   | Behavior                                                                                                      |
+| ------ | ------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------- |
+| GET    | `/borrower/profile`                   | Borrower | Returns `{ profile, eligibility }`.                                                                           |
+| PUT    | `/borrower/profile`                   | Borrower | Validates and saves profile fields, returns `{ profile, eligibility }`.                                       |
+| POST   | `/borrower/loans/apply`               | Borrower | Accepts multipart `salarySlip`, `amount`, and `tenureDays`; reruns eligibility and creates an `APPLIED` loan. |
+| GET    | `/borrower/loans`                     | Borrower | Returns the complete borrower loan timeline, including active, rejected, and closed records.                  |
+| GET    | `/borrower/loans/current`             | Borrower | Returns the borrower's latest loan with financial summary and public salary-slip metadata.                    |
+| GET    | `/borrower/loans/current/salary-slip` | Borrower | Retrieves the latest salary slip through an authenticated inline response.                                    |
 
 ### 11.4 Operations routes
 
-| Method | Route | Access | Behavior |
-|---|---|---|---|
-| GET | `/ops/sales/leads` | Sales/Admin | Returns borrower accounts with no loan application. |
-| GET | `/ops/sanction/loans` | Sanction/Admin | Returns paginated `APPLIED` loans. |
-| GET | `/ops/sanction/history` | Sanction/Admin | Returns sanction history filtered by `SANCTIONED`, `REJECTED`, `DISBURSED`, or `CLOSED`. |
-| PATCH | `/ops/loans/:id/sanction` | Sanction/Admin | Approves or rejects an `APPLIED` loan; rejection requires a reason. |
-| GET | `/ops/disbursement/loans` | Disbursement/Admin | Returns paginated `SANCTIONED` loans. |
-| GET | `/ops/disbursement/history` | Disbursement/Admin | Returns `DISBURSED` or `CLOSED` history. |
-| PATCH | `/ops/loans/:id/disburse` | Disbursement/Admin | Changes a `SANCTIONED` loan to `DISBURSED`. |
-| GET | `/ops/collection/loans` | Collection/Admin | Returns paginated `DISBURSED` loans ready for payment. |
-| GET | `/ops/collection/history` | Collection/Admin | Returns disbursed or closed loans with at least one payment and their payment records. |
-| POST | `/ops/loans/:id/payments` | Collection/Admin | Validates and records a payment, possibly closing the loan. |
-| GET | `/ops/loans/:id` | Admin or owning operations role | Returns a loan only when its status belongs to the caller's operational module. |
-| DELETE | `/ops/borrowers/:id` | Admin only | Deletes a borrower only when no loan document exists for the account. |
-| DELETE | `/ops/loans/:id` | Admin only | Deletes only `APPLIED` or `REJECTED` applications with no payment history. |
+| Method | Route                                | Access                          | Behavior                                                                                                                                                                           |
+| ------ | ------------------------------------ | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/ops/sales/leads`                   | Sales/Admin                     | Returns borrower accounts with no loan application.                                                                                                                                |
+| GET    | `/ops/sanction/loans`                | Sanction/Admin                  | Returns paginated `APPLIED` and `SANCTION_REVIEW` loans.                                                                                                                           |
+| GET    | `/ops/sanction/history`              | Sanction/Admin                  | Returns sanction history filtered by `SANCTIONED`, `REJECTED`, `DISBURSED`, or `CLOSED`.                                                                                           |
+| PATCH  | `/ops/loans/:id/sanction`            | Sanction/Admin                  | Approves or finally rejects an `APPLIED` or `SANCTION_REVIEW` loan; rejection requires a reason.                                                                                   |
+| GET    | `/ops/disbursement/loans`            | Disbursement/Admin              | Returns paginated `SANCTIONED` loans.                                                                                                                                              |
+| GET    | `/ops/disbursement/history`          | Disbursement/Admin              | Returns read-only `SANCTION_REVIEW`, `REJECTED`, `DISBURSED`, or `CLOSED` history. `SANCTION_REVIEW` records expose the review comment but cannot be acted on from this workspace. |
+| PATCH  | `/ops/loans/:id/disburse`            | Disbursement/Admin              | Changes a `SANCTIONED` loan to `DISBURSED`.                                                                                                                                        |
+| PATCH  | `/ops/loans/:id/sanction-review`     | Disbursement/Admin              | Changes a `SANCTIONED` loan to `SANCTION_REVIEW` with a mandatory borrower-facing comment.                                                                                         |
+| PATCH  | `/ops/loans/:id/disbursement-reject` | Disbursement/Admin              | Changes a `SANCTIONED` loan to `REJECTED` with a mandatory borrower-facing comment.                                                                                                |
+| GET    | `/ops/collection/loans`              | Collection/Admin                | Returns paginated `DISBURSED` loans ready for payment.                                                                                                                             |
+| GET    | `/ops/collection/history`            | Collection/Admin                | Returns disbursed or closed loans with at least one payment and their payment records.                                                                                             |
+| POST   | `/ops/loans/:id/payments`            | Collection/Admin                | Validates and records a payment, possibly closing the loan.                                                                                                                        |
+| GET    | `/ops/loans/:id`                     | Admin or owning operations role | Returns a loan only when its status belongs to the caller's operational module.                                                                                                    |
+| DELETE | `/ops/borrowers/:id`                 | Admin only                      | Deletes a borrower only when no loan document exists for the account.                                                                                                              |
+| DELETE | `/ops/loans/:id`                     | Admin only                      | Deletes only `APPLIED`, `SANCTION_REVIEW`, or `REJECTED` applications with no payment history.                                                                                     |
 
-List endpoints accept `page`, `pageSize`, and an optional case-insensitive `search` value up to 100 characters. Search matches borrower name, email, PAN, or a complete loan ID; collection endpoints also match payment UTR. The default page size is 10 and the maximum is 50. History endpoints accept the status filters documented above.
+List endpoints accept `page`, `pageSize`, and an optional case-insensitive `search` value up to 100 characters. Search matches borrower name, email, PAN, or a complete loan ID; collection endpoints also match payment UTR. The default page size is 10 and the maximum is 50. History endpoints accept the status filters documented above. Disbursement history includes `SANCTION_REVIEW` records for visibility only; disbursement mutation routes still accept only `SANCTIONED` loans.
 
 ### Administrative deletion policy
 
 Administrative deletion is deliberately limited to non-financial cleanup:
 
 - `DELETE /ops/borrowers/:id` requires `ADMIN` and rejects any borrower with loan history using `BORROWER_HAS_LOAN_HISTORY`.
-- `DELETE /ops/loans/:id` requires `ADMIN` and allows only `APPLIED` or `REJECTED` loans with zero payment history.
+- `DELETE /ops/loans/:id` requires `ADMIN` and allows only `APPLIED`, `SANCTION_REVIEW`, or `REJECTED` loans with zero payment history.
 - Disbursed and closed loans, loans with payments, and payment documents themselves are not deletable through the API.
 - A deleted loan's hosted salary slip is removed on a best-effort basis after the database record is deleted.
 - Both routes validate the ObjectId path parameter and return `401`, `403`, `404`, or `409` as appropriate.
@@ -465,6 +488,8 @@ The dashboard supports:
 - Disbursement action.
 - Payment entry with UTR, amount, and payment date.
 - UTR browser validation and bottom-right format tooltip.
+- UTR duplicate errors preserve the payment form for correction.
+- Repayment amount validation uses the current outstanding balance as the UI maximum and rejects overpayments before the request.
 - Partial-payment messaging.
 - Status-filtered history and recorded payment lists.
 - Admin-only cleanup buttons for open borrower leads, applied applications, and rejected applications.
@@ -474,18 +499,26 @@ The dashboard supports:
 
 `npm run seed` upserts one local account for each role. Every seeded account uses the password `Password123!`:
 
-| Role | Email |
-|---|---|
-| Admin | `admin@lms.test` |
-| Sales | `sales@lms.test` |
-| Sanction | `sanction@lms.test` |
+| Role         | Email                   |
+| ------------ | ----------------------- |
+| Admin        | `admin@lms.test`        |
+| Sales        | `sales@lms.test`        |
+| Sanction     | `sanction@lms.test`     |
 | Disbursement | `disbursement@lms.test` |
-| Collection | `collection@lms.test` |
-| Borrower | `borrower@lms.test` |
+| Collection   | `collection@lms.test`   |
+| Borrower     | `borrower@lms.test`     |
 
 These accounts are for local operation and should be replaced or disabled in a production deployment.
 
 ## 14. Local operation
+
+### Container deployment
+
+The repository includes production multi-stage Dockerfiles for both applications and a root `docker-compose.yml` for local full-stack orchestration. Compose starts MongoDB, waits for its health check, starts the API with the internal `mongodb://mongo:27017/creditsea_lms` connection, and then starts the Next.js standalone server. MongoDB, backend, and frontend have health checks. The frontend build receives `NEXT_PUBLIC_API_URL` as a build argument because browser-side API configuration is embedded at build time.
+
+The root `.env.docker.example` supplies local Compose inputs for JWT, frontend origin, email verification, SMTP, Cloudinary, and the browser API URL. SMTP is required for testing a newly created borrower account; Cloudinary is required for salary-slip upload and preview. Seeded users are already verified and can be used without SMTP delivery.
+
+For container-capable production hosting, deploy the backend and frontend images independently, use a managed MongoDB connection string, and provide the production Cloudinary credentials, JWT secret, `FRONTEND_URL`, and public frontend API URL. Do not expose the Compose MongoDB service or use Docker-internal hostnames in browser configuration. Vercel deployment remains supported separately through `backend/vercel.json`.
 
 ### Install dependencies
 
@@ -544,8 +577,11 @@ cd ../frontend && npm run build
 - Verify profile save updates the navbar name without reload.
 - Verify PAN and UTR tooltips appear at the bottom-right and the input guidance is accessible by keyboard focus.
 - Verify toast feedback for login, signup, logout, profile save, file selection, application submission, operational actions, and errors.
-- Verify borrower loan display and protected salary-slip preview.
+- Verify borrower current-loan display, complete loan history, borrower-facing rejection/review comments, and protected salary-slip preview.
+- Verify sanction rejection, disbursement rejection, and `SANCTION_REVIEW` handback transitions.
 - Verify pagination, empty states, history filters, and payment balance updates.
+- Verify Disbursement history shows `SANCTION_REVIEW` records with comments and preview access but no mutation actions.
+- Verify Docker Compose configuration, service health checks, seed command, and browser/API connectivity.
 
 ## 16. Known technical boundaries
 
