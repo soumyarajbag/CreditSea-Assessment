@@ -24,6 +24,7 @@ export enum EmploymentMode {
 
 export enum LoanStatus {
   APPLIED = 'APPLIED',
+  SANCTION_REVIEW = 'SANCTION_REVIEW',
   SANCTIONED = 'SANCTIONED',
   REJECTED = 'REJECTED',
   DISBURSED = 'DISBURSED',

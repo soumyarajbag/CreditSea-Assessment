@@ -28,6 +28,7 @@ export const toPublicLoan = (loan: Partial<LoanDocument> & { _id: unknown; borro
   outstandingBalance: roundMoney(Math.max((loan.totalRepayment ?? 0) - (loan.totalPaid ?? 0), 0)),
   status: loan.status,
   rejectionReason: loan.rejectionReason ?? null,
+  reviewComment: loan.reviewComment ?? null,
   salarySlip: loan.salarySlip
     ? {
         originalName: loan.salarySlip.originalName,

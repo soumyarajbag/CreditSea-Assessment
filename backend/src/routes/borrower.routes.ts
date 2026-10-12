@@ -1,6 +1,6 @@
 import { Router } from 'express';
 
-import { applyForLoan, getLoan, getProfile, getSalarySlip, updateProfile } from '../controllers/borrower.controller';
+import { applyForLoan, getLoan, getLoans, getProfile, getSalarySlip, updateProfile } from '../controllers/borrower.controller';
 import { requireAuth } from '../middleware/auth.middleware';
 import { authorizeRoles } from '../middleware/rbac.middleware';
 import { salarySlipUpload } from '../middleware/upload.middleware';
@@ -22,4 +22,5 @@ borrowerRouter.post(
   asyncHandler(applyForLoan),
 );
 borrowerRouter.get('/loans/current/salary-slip', ...borrowerOnly, asyncHandler(getSalarySlip));
+borrowerRouter.get('/loans', ...borrowerOnly, asyncHandler(getLoans));
 borrowerRouter.get('/loans/current', ...borrowerOnly, asyncHandler(getLoan));

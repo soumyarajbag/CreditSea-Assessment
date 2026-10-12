@@ -13,6 +13,10 @@ export const sanctionDecisionSchema = z
     }
   });
 
+export const sanctionReviewSchema = z.object({
+  reason: z.string().trim().min(1, 'A review comment is required.').max(500, 'The review comment cannot exceed 500 characters.'),
+});
+
 export const paymentSchema = z.object({
   utr: z.string().trim().toUpperCase().regex(UTR_REGEX, 'UTR must be 6–30 characters using letters, digits, and optional hyphens.'),
   amount: z.coerce.number().finite().positive(),

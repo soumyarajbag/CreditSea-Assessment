@@ -70,6 +70,7 @@ const userExample = {
   id: '671234567890abcdef123456',
   email: 'borrower@example.com',
   role: 'BORROWER',
+  emailVerified: true,
   fullName: 'Aarav Sharma',
   pan: 'ABCDE1234F',
   dateOfBirth: 695433600000,
@@ -96,6 +97,7 @@ const loanExample = {
   outstandingBalance: 154438.36,
   status: 'APPLIED',
   rejectionReason: null,
+  reviewComment: null,
   salarySlip: {
     originalName: 'salary-slip-january.pdf',
     mimeType: 'application/pdf',
@@ -128,7 +130,7 @@ export const swaggerDocument = {
       '',
       '## Authentication in Swagger UI',
       '',
-      '1. Use **POST /auth/signup** or **POST /auth/login** with **Try it out**. The API sets the `creditsea_access_token` HttpOnly cookie.',
+      '1. Create a borrower with **POST /auth/signup**, open the emailed verification link, then use **POST /auth/login** with **Try it out**. Login sets the `creditsea_access_token` HttpOnly cookie.',
       '2. Because this documentation is served by the API, the browser sends that cookie automatically on later **Try it out** requests.',
       '3. Protected operations are marked with the `cookieAuth` and `bearerAuth` security schemes. The cookie is the normal browser flow; the Bearer scheme is available for API clients and direct testing.',
       '4. Role restrictions are enforced by the backend even if an endpoint is visible in the documentation.',
@@ -179,7 +181,8 @@ export const swaggerDocument = {
       post: {
         tags: ['Authentication'],
         summary: 'Create a borrower account',
-        description: 'Creates a BORROWER account and sets the `creditsea_access_token` HttpOnly cookie.',
+        description:
+          'Creates an unverified BORROWER account and sends a one-time email verification link. A session is created only after email verification and login.',
         operationId: 'signup',
         requestBody: {
           required: true,
@@ -191,35 +194,29 @@ export const swaggerDocument = {
           },
         },
         responses: {
-          201: {
-            description: 'Borrower account created and session cookie set.',
-            headers: {
-              'Set-Cookie': {
-                description: 'HttpOnly session cookie. Browsers store this automatically.',
-                schema: { type: 'string' },
-                example: 'creditsea_access_token=eyJhbGciOiJIUzI1NiJ9...; Max-Age=86400; Path=/; HttpOnly; SameSite=Lax',
-              },
+          201: jsonResponse(
+            'Borrower account created and verification email queued.',
+            '#/components/schemas/VerificationRequiredResponse',
+            {
+              message: 'Account created. Check your email to verify the account before signing in.',
+              email: 'borrower@example.com',
+              verificationRequired: true,
+              verificationExpiresHours: 24,
             },
-            content: {
-              'application/json': {
-                schema: { $ref: '#/components/schemas/AuthResponse' },
-                example: {
-                  user: {
-                    ...userExample,
-                    fullName: null,
-                    pan: null,
-                    dateOfBirth: null,
-                    monthlySalary: null,
-                    employmentMode: null,
-                    profileCompleted: false,
-                  },
-                },
-              },
-            },
-          },
+          ),
           409: errorResponse('The email is already registered.', {
             message: 'An account with this email already exists.',
             code: 'EMAIL_ALREADY_EXISTS',
+            errors: [],
+          }),
+          502: errorResponse('The email provider could not deliver the verification message.', {
+            message: 'We could not send the verification email. Please try again.',
+            code: 'EMAIL_DELIVERY_FAILED',
+            errors: [],
+          }),
+          503: errorResponse('SMTP is not configured.', {
+            message: 'Email verification is not configured. Add SMTP settings to the backend environment.',
+            code: 'EMAIL_SERVICE_NOT_CONFIGURED',
             errors: [],
           }),
           422: validationResponse,
@@ -263,7 +260,74 @@ export const swaggerDocument = {
             code: 'INVALID_CREDENTIALS',
             errors: [],
           }),
+          403: errorResponse('The account email has not been verified.', {
+            message: 'Please verify your email before signing in.',
+            code: 'EMAIL_NOT_VERIFIED',
+            errors: [],
+          }),
           422: validationResponse,
+        },
+      },
+    },
+    '/auth/verify-email': {
+      post: {
+        tags: ['Authentication'],
+        summary: 'Verify a borrower email address',
+        description: 'Consumes the one-time token from the verification email. Tokens expire after the configured verification window.',
+        operationId: 'verifyEmail',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/EmailVerificationRequest' },
+              example: { token: 'a1b2c3d4e5f678901234567890abcdef1234567890abcdef1234567890abcdef' },
+            },
+          },
+        },
+        responses: {
+          200: jsonResponse('Email verified successfully.', '#/components/schemas/MessageResponse', {
+            message: 'Email verified successfully. You can now sign in.',
+          }),
+          400: errorResponse('The token is invalid or expired.', {
+            message: 'This verification link is invalid or has expired.',
+            code: 'EMAIL_VERIFICATION_INVALID',
+            errors: [],
+          }),
+          422: validationResponse,
+        },
+      },
+    },
+    '/auth/resend-verification': {
+      post: {
+        tags: ['Authentication'],
+        summary: 'Resend an email verification link',
+        description:
+          'Sends a new verification link when the email belongs to an unverified account. The response is intentionally generic to reduce account enumeration.',
+        operationId: 'resendVerification',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/EmailAddressRequest' },
+              example: { email: 'borrower@example.com' },
+            },
+          },
+        },
+        responses: {
+          202: jsonResponse('Request accepted.', '#/components/schemas/MessageResponse', {
+            message: 'If an unverified account exists for this email, a new verification link has been sent.',
+          }),
+          422: validationResponse,
+          502: errorResponse('The email provider could not deliver the message.', {
+            message: 'We could not send the verification email. Please try again.',
+            code: 'EMAIL_DELIVERY_FAILED',
+            errors: [],
+          }),
+          503: errorResponse('SMTP is not configured.', {
+            message: 'Email verification is not configured. Add SMTP settings to the backend environment.',
+            code: 'EMAIL_SERVICE_NOT_CONFIGURED',
+            errors: [],
+          }),
         },
       },
     },
@@ -418,6 +482,25 @@ export const swaggerDocument = {
         },
       },
     },
+    '/borrower/loans': {
+      get: {
+        tags: ['Borrower'],
+        summary: 'List all borrower loans',
+        description: 'Returns the borrower loan timeline, including the latest active application and previous rejected or closed records.',
+        operationId: 'getBorrowerLoans',
+        security: protectedRouteSecurity,
+        responses: {
+          200: jsonResponse('Borrower loan history.', '#/components/schemas/BorrowerLoanListResponse', {
+            loans: [
+              loanExample,
+              { ...loanExample, id: '671234567890abcdef123998', status: 'REJECTED', rejectionReason: 'Income policy not met.' },
+            ],
+          }),
+          401: unauthorizedResponse,
+          403: forbiddenResponse,
+        },
+      },
+    },
     '/borrower/loans/current/salary-slip': {
       get: {
         tags: ['Borrower'],
@@ -484,8 +567,8 @@ export const swaggerDocument = {
         security: protectedRouteSecurity,
         parameters: paginationParameters,
         responses: {
-          200: jsonResponse('Paginated APPLIED loans.', '#/components/schemas/LoanListResponse', {
-            loans: [loanExample],
+          200: jsonResponse('Paginated loans waiting for sanction review.', '#/components/schemas/LoanListResponse', {
+            loans: [{ ...loanExample, status: 'SANCTION_REVIEW', reviewComment: 'Please verify the latest income document.' }],
             pagination: paginationExample,
           }),
           401: unauthorizedResponse,
@@ -530,7 +613,7 @@ export const swaggerDocument = {
       patch: {
         tags: ['Sanction'],
         summary: 'Approve or reject an applied loan',
-        description: 'Only APPLIED loans can be sanctioned. A rejection reason is required when decision is reject.',
+        description: 'Only APPLIED or SANCTION_REVIEW loans can be sanctioned. A rejection reason is required when decision is reject.',
         operationId: 'sanctionLoan',
         security: protectedRouteSecurity,
         parameters: [{ $ref: '#/components/parameters/LoanId' }],
@@ -557,8 +640,8 @@ export const swaggerDocument = {
             code: 'LOAN_NOT_FOUND',
             errors: [],
           }),
-          409: errorResponse('The loan is no longer APPLIED.', {
-            message: 'Only applied loans can be sanctioned.',
+          409: errorResponse('The loan is no longer waiting for sanction review.', {
+            message: 'Only applied or sanction-review loans can be sanctioned.',
             code: 'INVALID_LOAN_TRANSITION',
             errors: [],
           }),
@@ -597,15 +680,19 @@ export const swaggerDocument = {
             in: 'query',
             required: false,
             description: 'Optional status filter.',
-            schema: { type: 'string', enum: ['DISBURSED', 'CLOSED'] },
-            example: 'DISBURSED',
+            schema: { type: 'string', enum: ['SANCTION_REVIEW', 'REJECTED', 'DISBURSED', 'CLOSED'] },
+            example: 'SANCTION_REVIEW',
           },
         ],
         responses: {
-          200: jsonResponse('Paginated disbursement history.', '#/components/schemas/LoanListResponse', {
-            loans: [{ ...loanExample, status: 'DISBURSED', sanctionedAt: 1735776000000, disbursedAt: 1735862400000 }],
-            pagination: paginationExample,
-          }),
+          200: jsonResponse(
+            'Paginated read-only disbursement history, including loans returned to sanction review.',
+            '#/components/schemas/LoanListResponse',
+            {
+              loans: [{ ...loanExample, status: 'SANCTION_REVIEW', reviewComment: 'Please verify the latest income document.' }],
+              pagination: paginationExample,
+            },
+          ),
           401: unauthorizedResponse,
           403: forbiddenResponse,
           422: validationResponse,
@@ -636,6 +723,82 @@ export const swaggerDocument = {
             code: 'INVALID_LOAN_TRANSITION',
             errors: [],
           }),
+        },
+      },
+    },
+    '/ops/loans/{id}/sanction-review': {
+      patch: {
+        tags: ['Disbursement'],
+        summary: 'Send a sanctioned loan back for sanction review',
+        description:
+          'Disbursement users can reject a sanctioned loan for a documented issue. The loan moves to SANCTION_REVIEW and the comment becomes visible to both the sanction team and the borrower.',
+        operationId: 'requestSanctionReview',
+        security: protectedRouteSecurity,
+        parameters: [{ $ref: '#/components/parameters/LoanId' }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/SanctionReviewRequest' },
+              example: { reason: 'Salary slip does not match the declared monthly income.' },
+            },
+          },
+        },
+        responses: {
+          200: jsonResponse('Loan sent back for sanction review.', '#/components/schemas/LoanResponse', {
+            loan: { ...loanExample, status: 'SANCTION_REVIEW', reviewComment: 'Salary slip does not match the declared monthly income.' },
+          }),
+          401: unauthorizedResponse,
+          403: forbiddenResponse,
+          404: errorResponse('The loan ID is not valid or does not exist.', {
+            message: 'Loan not found.',
+            code: 'LOAN_NOT_FOUND',
+            errors: [],
+          }),
+          409: errorResponse('The loan is no longer sanctioned.', {
+            message: 'Only sanctioned loans can be sent for sanction review.',
+            code: 'INVALID_LOAN_TRANSITION',
+            errors: [],
+          }),
+          422: validationResponse,
+        },
+      },
+    },
+    '/ops/loans/{id}/disbursement-reject': {
+      patch: {
+        tags: ['Disbursement'],
+        summary: 'Reject a sanctioned loan at disbursement',
+        description:
+          'Disbursement users can finally reject a sanctioned loan when it cannot be released. The rejection comment is visible to the borrower, and REJECTED loans do not block a new borrower application.',
+        operationId: 'rejectAtDisbursement',
+        security: protectedRouteSecurity,
+        parameters: [{ $ref: '#/components/parameters/LoanId' }],
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: { $ref: '#/components/schemas/SanctionReviewRequest' },
+              example: { reason: 'Bank verification failed for the beneficiary account.' },
+            },
+          },
+        },
+        responses: {
+          200: jsonResponse('Loan rejected at disbursement.', '#/components/schemas/LoanResponse', {
+            loan: { ...loanExample, status: 'REJECTED', rejectionReason: 'Bank verification failed for the beneficiary account.' },
+          }),
+          401: unauthorizedResponse,
+          403: forbiddenResponse,
+          404: errorResponse('The loan ID is not valid or does not exist.', {
+            message: 'Loan not found.',
+            code: 'LOAN_NOT_FOUND',
+            errors: [],
+          }),
+          409: errorResponse('The loan is no longer sanctioned.', {
+            message: 'Only sanctioned loans can be rejected.',
+            code: 'INVALID_LOAN_TRANSITION',
+            errors: [],
+          }),
+          422: validationResponse,
         },
       },
     },
@@ -742,7 +905,7 @@ export const swaggerDocument = {
           409: errorResponse('The UTR is duplicated or the loan changed during recording.', {
             message: 'UTR number must be unique across all payments.',
             code: 'DUPLICATE_UTR',
-            errors: [],
+            errors: [{ field: 'utr', message: 'UTR number must be unique across all payments.' }],
           }),
           422: errorResponse('The payment is invalid or exceeds the outstanding balance.', {
             message: 'Payment cannot exceed the outstanding balance of INR 104438.36.',
@@ -804,7 +967,7 @@ export const swaggerDocument = {
         tags: ['Administration'],
         summary: 'Delete a non-financial loan application',
         description:
-          'Admin-only cleanup operation. Only APPLIED or REJECTED applications with no payment history can be deleted. Disbursed and closed financial records cannot be deleted.',
+          'Admin-only cleanup operation. Only APPLIED, SANCTION_REVIEW, or REJECTED applications with no payment history can be deleted. Disbursed and closed financial records cannot be deleted.',
         operationId: 'deleteLoanApplication',
         security: protectedRouteSecurity,
         parameters: [{ $ref: '#/components/parameters/LoanId' }],
@@ -822,8 +985,41 @@ export const swaggerDocument = {
             errors: [],
           }),
           409: errorResponse('The loan is financial, has payments, or changed during deletion.', {
-            message: 'Only applied or rejected applications can be deleted.',
+            message: 'Only applied, sanction-review, or rejected applications can be deleted.',
             code: 'LOAN_DELETE_NOT_ALLOWED',
+            errors: [],
+          }),
+        },
+      },
+    },
+    '/ops/loans/{id}/salary-slip': {
+      get: {
+        tags: ['Operations'],
+        summary: 'Preview an operations salary slip',
+        description:
+          'Returns the salary slip through the authenticated backend for administrators, sanction users, and disbursement users. The hosted Cloudinary URL is never exposed. Sanction and disbursement users can access the statuses shown in their pending and history views.',
+        operationId: 'getOperationsSalarySlip',
+        security: protectedRouteSecurity,
+        parameters: [{ $ref: '#/components/parameters/LoanId' }],
+        responses: {
+          200: {
+            description: 'Salary slip bytes returned inline.',
+            content: {
+              'application/pdf': { schema: { type: 'string', format: 'binary' } },
+              'image/jpeg': { schema: { type: 'string', format: 'binary' } },
+              'image/png': { schema: { type: 'string', format: 'binary' } },
+            },
+          },
+          401: unauthorizedResponse,
+          403: forbiddenResponse,
+          404: errorResponse('The loan ID is not valid or the salary slip is unavailable.', {
+            message: 'Salary slip preview is unavailable.',
+            code: 'SALARY_SLIP_NOT_FOUND',
+            errors: [],
+          }),
+          502: errorResponse('Cloudinary could not return the stored salary slip.', {
+            message: 'File storage could not return the salary slip.',
+            code: 'FILE_STORAGE_FETCH_FAILED',
             errors: [],
           }),
         },
@@ -837,7 +1033,7 @@ export const swaggerDocument = {
         in: 'cookie',
         name: 'creditsea_access_token',
         description:
-          'Primary browser authentication. POST /auth/login or POST /auth/signup sets this HttpOnly cookie. The browser sends it automatically; JavaScript cannot read it.',
+          'Primary browser authentication. POST /auth/login sets this HttpOnly cookie after the account email is verified. The browser sends it automatically; JavaScript cannot read it.',
       },
       bearerAuth: {
         type: 'http',
@@ -904,13 +1100,60 @@ export const swaggerDocument = {
           password: { type: 'string', format: 'password', minLength: 8, maxLength: 72, example: 'Password123!' },
         },
       },
+      EmailAddressRequest: {
+        type: 'object',
+        required: ['email'],
+        properties: {
+          email: { type: 'string', format: 'email', maxLength: 160, example: 'borrower@example.com' },
+        },
+      },
+      EmailVerificationRequest: {
+        type: 'object',
+        required: ['token'],
+        properties: {
+          token: {
+            type: 'string',
+            minLength: 64,
+            maxLength: 64,
+            pattern: '^[a-fA-F0-9]{64}$',
+            example: 'a1b2c3d4e5f678901234567890abcdef1234567890abcdef1234567890abcdef',
+          },
+        },
+      },
+      VerificationRequiredResponse: {
+        type: 'object',
+        required: ['message', 'email', 'verificationRequired', 'verificationExpiresHours'],
+        properties: {
+          message: { type: 'string', example: 'Account created. Check your email to verify the account before signing in.' },
+          email: { type: 'string', format: 'email', example: 'borrower@example.com' },
+          verificationRequired: { type: 'boolean', example: true },
+          verificationExpiresHours: { type: 'integer', minimum: 1, example: 24 },
+        },
+      },
+      MessageResponse: {
+        type: 'object',
+        required: ['message'],
+        properties: { message: { type: 'string', example: 'Email verified successfully. You can now sign in.' } },
+      },
       User: {
         type: 'object',
-        required: ['id', 'email', 'role', 'fullName', 'pan', 'dateOfBirth', 'monthlySalary', 'employmentMode', 'profileCompleted'],
+        required: [
+          'id',
+          'email',
+          'role',
+          'emailVerified',
+          'fullName',
+          'pan',
+          'dateOfBirth',
+          'monthlySalary',
+          'employmentMode',
+          'profileCompleted',
+        ],
         properties: {
           id: { type: 'string', example: userExample.id },
           email: { type: 'string', format: 'email', example: userExample.email },
           role: { type: 'string', enum: ['ADMIN', 'SALES', 'SANCTION', 'DISBURSEMENT', 'COLLECTION', 'BORROWER'], example: 'BORROWER' },
+          emailVerified: { type: 'boolean', example: true },
           fullName: { type: 'string', nullable: true, example: userExample.fullName },
           pan: { type: 'string', nullable: true, pattern: '^[A-Z]{5}[0-9]{4}[A-Z]$', example: userExample.pan },
           dateOfBirth: {
@@ -999,6 +1242,7 @@ export const swaggerDocument = {
           'outstandingBalance',
           'status',
           'rejectionReason',
+          'reviewComment',
           'salarySlip',
           'sanctionedAt',
           'disbursedAt',
@@ -1018,8 +1262,13 @@ export const swaggerDocument = {
           totalRepayment: { type: 'number', example: 154438.36 },
           totalPaid: { type: 'number', example: 0 },
           outstandingBalance: { type: 'number', example: 154438.36 },
-          status: { type: 'string', enum: ['APPLIED', 'SANCTIONED', 'REJECTED', 'DISBURSED', 'CLOSED'], example: 'APPLIED' },
+          status: {
+            type: 'string',
+            enum: ['APPLIED', 'SANCTION_REVIEW', 'SANCTIONED', 'REJECTED', 'DISBURSED', 'CLOSED'],
+            example: 'APPLIED',
+          },
           rejectionReason: { type: 'string', nullable: true, example: null },
+          reviewComment: { type: 'string', nullable: true, example: null },
           salarySlip: { $ref: '#/components/schemas/SalarySlip' },
           sanctionedAt: { type: 'integer', format: 'int64', nullable: true, example: null },
           disbursedAt: { type: 'integer', format: 'int64', nullable: true, example: null },
@@ -1054,6 +1303,13 @@ export const swaggerDocument = {
           pagination: { $ref: '#/components/schemas/PaginationMeta' },
         },
       },
+      BorrowerLoanListResponse: {
+        type: 'object',
+        required: ['loans'],
+        properties: {
+          loans: { type: 'array', items: { $ref: '#/components/schemas/Loan' } },
+        },
+      },
       Lead: {
         type: 'object',
         required: ['id', 'email', 'fullName', 'profileCompleted', 'createdAt'],
@@ -1079,6 +1335,19 @@ export const swaggerDocument = {
         properties: {
           decision: { type: 'string', enum: ['approve', 'reject'], example: 'approve' },
           reason: { type: 'string', maxLength: 500, description: 'Required when decision is reject.', example: 'Income policy not met.' },
+        },
+      },
+      SanctionReviewRequest: {
+        type: 'object',
+        required: ['reason'],
+        properties: {
+          reason: {
+            type: 'string',
+            minLength: 1,
+            maxLength: 500,
+            description: 'Comment explaining why sanction review is required.',
+            example: 'Salary slip does not match the declared monthly income.',
+          },
         },
       },
       PaymentRequest: {
@@ -1135,7 +1404,7 @@ export const swaggerDocument = {
         properties: {
           deleted: { type: 'boolean', example: true },
           loanId: { type: 'string', example: loanExample.id },
-          status: { type: 'string', enum: ['APPLIED', 'REJECTED'], example: 'REJECTED' },
+          status: { type: 'string', enum: ['APPLIED', 'SANCTION_REVIEW', 'REJECTED'], example: 'REJECTED' },
         },
       },
     },

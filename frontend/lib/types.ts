@@ -1,13 +1,14 @@
 export type Role = 'ADMIN' | 'SALES' | 'SANCTION' | 'DISBURSEMENT' | 'COLLECTION' | 'BORROWER';
 
 export type EmploymentMode = 'SALARIED' | 'SELF_EMPLOYED' | 'UNEMPLOYED';
-export type LoanStatus = 'APPLIED' | 'SANCTIONED' | 'REJECTED' | 'DISBURSED' | 'CLOSED';
+export type LoanStatus = 'APPLIED' | 'SANCTION_REVIEW' | 'SANCTIONED' | 'REJECTED' | 'DISBURSED' | 'CLOSED';
 export type EpochTimestamp = number;
 
 export interface User {
   id: string;
   email: string;
   role: Role;
+  emailVerified: boolean;
   fullName: string | null;
   pan: string | null;
   dateOfBirth: EpochTimestamp | null;
@@ -45,6 +46,7 @@ export interface Loan {
   outstandingBalance: number;
   status: LoanStatus;
   rejectionReason: string | null;
+  reviewComment: string | null;
   salarySlip: SalarySlip | null;
   sanctionedAt: EpochTimestamp | null;
   disbursedAt: EpochTimestamp | null;

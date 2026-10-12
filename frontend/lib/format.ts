@@ -13,7 +13,17 @@ export const epochToDateInput = (value: number | null | undefined): string =>
 
 export const dateInputToEpoch = (value: string): number => Date.parse(`${value}T00:00:00.000Z`);
 
-export const formatLoanStatus = (status: LoanStatus): string => status.charAt(0) + status.slice(1).toLowerCase();
+export const formatLoanStatus = (status: LoanStatus): string => {
+  const labels: Record<LoanStatus, string> = {
+    APPLIED: 'Applied',
+    SANCTION_REVIEW: 'Sanction review',
+    SANCTIONED: 'Sanctioned',
+    REJECTED: 'Rejected',
+    DISBURSED: 'Disbursed',
+    CLOSED: 'Closed',
+  };
+  return labels[status];
+};
 
 export const simpleInterest = (amount: number, tenureDays: number): number =>
   Math.round(((amount * 12 * tenureDays) / (365 * 100) + Number.EPSILON) * 100) / 100;

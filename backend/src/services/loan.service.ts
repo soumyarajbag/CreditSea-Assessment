@@ -18,7 +18,7 @@ export const calculateLoan = (amount: number, tenureDays: number) => {
   return { simpleInterest, totalRepayment: roundMoney(amount + simpleInterest) };
 };
 
-const activeLoanStatuses = [LoanStatus.APPLIED, LoanStatus.SANCTIONED, LoanStatus.DISBURSED];
+const activeLoanStatuses = [LoanStatus.APPLIED, LoanStatus.SANCTION_REVIEW, LoanStatus.SANCTIONED, LoanStatus.DISBURSED];
 
 export const updateBorrowerProfile = async (userId: string, profile: Record<string, unknown>) => {
   const user = await UserModel.findOneAndUpdate(
@@ -89,10 +89,19 @@ export const getBorrowerLoan = async (borrowerId: string) => {
   return toPublicLoan(loan);
 };
 
+export const getBorrowerLoans = async (borrowerId: string) => {
+  const loans = await LoanModel.find({ borrowerId }).sort({ createdAt: -1 }).lean();
+  return { loans: loans.map((loan) => toPublicLoan(loan)) };
+};
+
 export const getBorrowerSalarySlip = async (borrowerId: string) => {
   const loan = await LoanModel.findOne({ borrowerId }).sort({ createdAt: -1 }).lean();
   if (!loan) throw new AppError(404, 'No loan application found.', 'LOAN_NOT_FOUND');
 
+  return getSalarySlipContent(loan);
+};
+
+const getSalarySlipContent = async (loan: LoanDocument) => {
   try {
     if (!loan.salarySlip.url) throw new Error('Hosted salary slip URL is missing.');
     const storedFile = await fetchStoredFile(loan.salarySlip.url);
@@ -142,7 +151,7 @@ const addLoanSearchFilter = async (
 };
 
 export const getSanctionLoans = async ({ page, pageSize, search }: PaginationInput) => {
-  const filter = await addLoanSearchFilter({ status: LoanStatus.APPLIED }, search);
+  const filter = await addLoanSearchFilter({ status: { $in: [LoanStatus.APPLIED, LoanStatus.SANCTION_REVIEW] } }, search);
   const [loans, total] = await Promise.all([
     populateBorrower(
       LoanModel.find(filter)
@@ -185,7 +194,7 @@ export const getDisbursementLoans = async ({ page, pageSize, search }: Paginatio
 };
 
 export const getDisbursementHistory = async ({ page, pageSize, search }: PaginationInput, status?: LoanStatus) => {
-  const historicalStatuses = [LoanStatus.DISBURSED, LoanStatus.CLOSED];
+  const historicalStatuses = [LoanStatus.SANCTION_REVIEW, LoanStatus.REJECTED, LoanStatus.DISBURSED, LoanStatus.CLOSED];
   const filter = await addLoanSearchFilter(status ? { status } : { status: { $in: historicalStatuses } }, search);
   const [loans, total] = await Promise.all([
     populateBorrower(
@@ -297,10 +306,20 @@ export const sanctionLoan = async (loanId: string, userId: string, decision: 'ap
   if (!Types.ObjectId.isValid(loanId)) throw new AppError(404, 'Loan not found.', 'LOAN_NOT_FOUND');
   const update =
     decision === 'approve'
-      ? { status: LoanStatus.SANCTIONED, sanctionedBy: userId, sanctionedAt: nowEpoch(), rejectionReason: undefined }
-      : { status: LoanStatus.REJECTED, rejectionReason: reason, sanctionedBy: userId, sanctionedAt: nowEpoch() };
-  const loan = await LoanModel.findOneAndUpdate({ _id: loanId, status: LoanStatus.APPLIED }, update, { new: true }).lean();
-  if (!loan) throw new AppError(409, 'Only applied loans can be sanctioned.', 'INVALID_LOAN_TRANSITION');
+      ? {
+          $set: { status: LoanStatus.SANCTIONED, sanctionedBy: userId, sanctionedAt: nowEpoch() },
+          $unset: { rejectionReason: 1, reviewComment: 1, reviewRequestedBy: 1, reviewRequestedAt: 1 },
+        }
+      : {
+          $set: { status: LoanStatus.REJECTED, rejectionReason: reason, sanctionedBy: userId, sanctionedAt: nowEpoch() },
+          $unset: { reviewComment: 1, reviewRequestedBy: 1, reviewRequestedAt: 1 },
+        };
+  const loan = await LoanModel.findOneAndUpdate(
+    { _id: loanId, status: { $in: [LoanStatus.APPLIED, LoanStatus.SANCTION_REVIEW] } },
+    update,
+    { new: true },
+  ).lean();
+  if (!loan) throw new AppError(409, 'Only applied or sanction-review loans can be sanctioned.', 'INVALID_LOAN_TRANSITION');
   return toPublicLoan(loan);
 };
 
@@ -312,6 +331,34 @@ export const disburseLoan = async (loanId: string, userId: string) => {
     { new: true },
   ).lean();
   if (!loan) throw new AppError(409, 'Only sanctioned loans can be disbursed.', 'INVALID_LOAN_TRANSITION');
+  return toPublicLoan(loan);
+};
+
+export const requestSanctionReview = async (loanId: string, userId: string, reason: string) => {
+  if (!Types.ObjectId.isValid(loanId)) throw new AppError(404, 'Loan not found.', 'LOAN_NOT_FOUND');
+  const loan = await LoanModel.findOneAndUpdate(
+    { _id: loanId, status: LoanStatus.SANCTIONED },
+    {
+      $set: { status: LoanStatus.SANCTION_REVIEW, reviewComment: reason, reviewRequestedBy: userId, reviewRequestedAt: nowEpoch() },
+      $unset: { rejectionReason: 1 },
+    },
+    { new: true },
+  ).lean();
+  if (!loan) throw new AppError(409, 'Only sanctioned loans can be sent for sanction review.', 'INVALID_LOAN_TRANSITION');
+  return toPublicLoan(loan);
+};
+
+export const rejectSanctionedLoan = async (loanId: string, reason: string) => {
+  if (!Types.ObjectId.isValid(loanId)) throw new AppError(404, 'Loan not found.', 'LOAN_NOT_FOUND');
+  const loan = await LoanModel.findOneAndUpdate(
+    { _id: loanId, status: LoanStatus.SANCTIONED },
+    {
+      $set: { status: LoanStatus.REJECTED, rejectionReason: reason },
+      $unset: { reviewComment: 1, reviewRequestedBy: 1, reviewRequestedAt: 1 },
+    },
+    { new: true },
+  ).lean();
+  if (!loan) throw new AppError(409, 'Only sanctioned loans can be rejected.', 'INVALID_LOAN_TRANSITION');
   return toPublicLoan(loan);
 };
 
@@ -328,8 +375,12 @@ export const recordPayment = async (
   payment: { utr: string; amount: number; paymentDate: number | string },
 ) => {
   const loan = await getDisbursedLoan(loanId);
-  const alreadyUsed = await PaymentModel.exists({ utr: payment.utr });
-  if (alreadyUsed) throw new AppError(409, 'UTR number must be unique across all payments.', 'DUPLICATE_UTR');
+  const normalizedUtr = payment.utr.trim().toUpperCase();
+  const duplicateUtrMessage = 'UTR number must be unique across all payments.';
+  const alreadyUsed = await PaymentModel.exists({ utr: normalizedUtr });
+  if (alreadyUsed) {
+    throw new AppError(409, duplicateUtrMessage, 'DUPLICATE_UTR', [{ field: 'utr', message: duplicateUtrMessage }]);
+  }
 
   const outstanding = roundMoney(loan.totalRepayment - loan.totalPaid);
   if (payment.amount > outstanding) {
@@ -356,7 +407,7 @@ export const recordPayment = async (
     await PaymentModel.create({
       loanId: loan._id,
       borrowerId: loan.borrowerId,
-      utr: payment.utr,
+      utr: normalizedUtr,
       amount: payment.amount,
       paymentDate: toEpoch(payment.paymentDate),
       recordedBy,
@@ -366,13 +417,20 @@ export const recordPayment = async (
       { _id: loan._id, totalPaid: nextTotalPaid },
       { $set: { totalPaid: loan.totalPaid, status: LoanStatus.DISBURSED }, $unset: { closedAt: 1 } },
     );
+    const mongoError = error as { code?: number; keyPattern?: Record<string, number>; keyValue?: Record<string, unknown> };
+    const isDuplicateUtr =
+      mongoError.code === 11000 &&
+      (mongoError.keyPattern?.utr === 1 || Object.prototype.hasOwnProperty.call(mongoError.keyValue ?? {}, 'utr'));
+    if (isDuplicateUtr) {
+      throw new AppError(409, duplicateUtrMessage, 'DUPLICATE_UTR', [{ field: 'utr', message: duplicateUtrMessage }]);
+    }
     throw error;
   }
 
   return toPublicLoan(updatedLoan);
 };
 
-export const getOperationsLoan = async (loanId: string, role: Role) => {
+const getOperationsLoanDocument = async (loanId: string, role: Role) => {
   if (!Types.ObjectId.isValid(loanId)) throw new AppError(404, 'Loan not found.', 'LOAN_NOT_FOUND');
   const loan = await LoanModel.findById(loanId)
     .populate('borrowerId', 'email fullName pan dateOfBirth monthlySalary employmentMode')
@@ -380,18 +438,41 @@ export const getOperationsLoan = async (loanId: string, role: Role) => {
   if (!loan) throw new AppError(404, 'Loan not found.', 'LOAN_NOT_FOUND');
   if (role !== Role.ADMIN) {
     const allowedStatuses: Record<string, LoanStatus[]> = {
-      [Role.SANCTION]: [LoanStatus.APPLIED, LoanStatus.SANCTIONED, LoanStatus.REJECTED],
-      [Role.DISBURSEMENT]: [LoanStatus.SANCTIONED, LoanStatus.DISBURSED],
+      [Role.SANCTION]: [
+        LoanStatus.APPLIED,
+        LoanStatus.SANCTION_REVIEW,
+        LoanStatus.SANCTIONED,
+        LoanStatus.REJECTED,
+        LoanStatus.DISBURSED,
+        LoanStatus.CLOSED,
+      ],
+      [Role.DISBURSEMENT]: [
+        LoanStatus.SANCTIONED,
+        LoanStatus.SANCTION_REVIEW,
+        LoanStatus.REJECTED,
+        LoanStatus.DISBURSED,
+        LoanStatus.CLOSED,
+      ],
       [Role.COLLECTION]: [LoanStatus.DISBURSED, LoanStatus.CLOSED],
     };
     if (!allowedStatuses[role]?.includes(loan.status)) {
       throw new AppError(403, 'This loan is outside your module.', 'FORBIDDEN');
     }
   }
+  return loan;
+};
+
+export const getOperationsLoan = async (loanId: string, role: Role) => {
+  const loan = await getOperationsLoanDocument(loanId, role);
   return toPublicLoan(loan);
 };
 
-const deletableLoanStatuses = [LoanStatus.APPLIED, LoanStatus.REJECTED];
+export const getOperationsSalarySlip = async (loanId: string, role: Role) => {
+  const loan = await getOperationsLoanDocument(loanId, role);
+  return getSalarySlipContent(loan);
+};
+
+const deletableLoanStatuses = [LoanStatus.APPLIED, LoanStatus.SANCTION_REVIEW, LoanStatus.REJECTED];
 
 export const deleteBorrowerWithoutLoanHistory = async (borrowerId: string) => {
   if (!Types.ObjectId.isValid(borrowerId)) throw new AppError(404, 'Borrower not found.', 'BORROWER_NOT_FOUND');
@@ -416,7 +497,7 @@ export const deleteNonFinancialLoanApplication = async (loanId: string) => {
   const existingLoan = await LoanModel.findById(loanId).lean();
   if (!existingLoan) throw new AppError(404, 'Loan not found.', 'LOAN_NOT_FOUND');
   if (!deletableLoanStatuses.includes(existingLoan.status)) {
-    throw new AppError(409, 'Only applied or rejected applications can be deleted.', 'LOAN_DELETE_NOT_ALLOWED');
+    throw new AppError(409, 'Only applied, sanction-review, or rejected applications can be deleted.', 'LOAN_DELETE_NOT_ALLOWED');
   }
 
   const hasPayments = await PaymentModel.exists({ loanId: existingLoan._id });

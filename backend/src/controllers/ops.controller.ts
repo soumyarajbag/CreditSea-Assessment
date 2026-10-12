@@ -8,10 +8,13 @@ import {
   getCollectionHistory,
   getDisbursementLoans,
   getOperationsLoan,
+  getOperationsSalarySlip,
   getSalesLeads,
   getSanctionHistory,
   getSanctionLoans,
   recordPayment,
+  rejectSanctionedLoan,
+  requestSanctionReview,
   sanctionLoan,
   deleteBorrowerWithoutLoanHistory,
   deleteNonFinancialLoanApplication,
@@ -41,12 +44,22 @@ export const disbursementLoans = async (req: Request, res: Response): Promise<vo
 };
 
 export const disbursementHistory = async (req: Request, res: Response): Promise<void> => {
-  const status = parseOptionalStatus(req.query, [LoanStatus.DISBURSED, LoanStatus.CLOSED]);
+  const status = parseOptionalStatus(req.query, [LoanStatus.SANCTION_REVIEW, LoanStatus.REJECTED, LoanStatus.DISBURSED, LoanStatus.CLOSED]);
   res.status(200).json(await getDisbursementHistory(parsePagination(req.query), status));
 };
 
 export const disburse = async (req: Request, res: Response): Promise<void> => {
   const loan = await disburseLoan(String(req.params.id), req.auth!.userId);
+  res.status(200).json({ loan });
+};
+
+export const sendForSanctionReview = async (req: Request, res: Response): Promise<void> => {
+  const loan = await requestSanctionReview(String(req.params.id), req.auth!.userId, req.body.reason);
+  res.status(200).json({ loan });
+};
+
+export const rejectAtDisbursement = async (req: Request, res: Response): Promise<void> => {
+  const loan = await rejectSanctionedLoan(String(req.params.id), req.body.reason);
   res.status(200).json({ loan });
 };
 
@@ -67,6 +80,13 @@ export const addPayment = async (req: Request, res: Response): Promise<void> => 
 export const loanDetails = async (req: Request, res: Response): Promise<void> => {
   const loan = await getOperationsLoan(String(req.params.id), req.auth!.role);
   res.status(200).json({ loan });
+};
+
+export const salarySlipPreview = async (req: Request, res: Response): Promise<void> => {
+  const salarySlip = await getOperationsSalarySlip(String(req.params.id), req.auth!.role);
+  res.setHeader('Content-Type', salarySlip.mimeType);
+  res.setHeader('Content-Disposition', 'inline');
+  res.status(200).send(salarySlip.content);
 };
 
 export const deleteBorrower = async (req: Request, res: Response): Promise<void> => {

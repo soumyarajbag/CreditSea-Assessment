@@ -10,17 +10,20 @@ import {
   disburse,
   disbursementHistory,
   disbursementLoans,
+  rejectAtDisbursement,
   loanDetails,
   salesLeads,
   sanction,
   sanctionHistory,
   sanctionLoans,
+  sendForSanctionReview,
+  salarySlipPreview,
 } from '../controllers/ops.controller';
 import { requireAuth } from '../middleware/auth.middleware';
 import { authorizeRoles } from '../middleware/rbac.middleware';
 import { validateBody } from '../middleware/validate.middleware';
 import { asyncHandler } from '../utils/async-handler';
-import { paymentSchema, sanctionDecisionSchema } from '../validators/ops.validator';
+import { paymentSchema, sanctionDecisionSchema, sanctionReviewSchema } from '../validators/ops.validator';
 
 export const opsRouter = Router();
 
@@ -37,6 +40,20 @@ opsRouter.patch(
 opsRouter.get('/disbursement/loans', requireAuth, authorizeRoles(Role.DISBURSEMENT, Role.ADMIN), asyncHandler(disbursementLoans));
 opsRouter.get('/disbursement/history', requireAuth, authorizeRoles(Role.DISBURSEMENT, Role.ADMIN), asyncHandler(disbursementHistory));
 opsRouter.patch('/loans/:id/disburse', requireAuth, authorizeRoles(Role.DISBURSEMENT, Role.ADMIN), asyncHandler(disburse));
+opsRouter.patch(
+  '/loans/:id/sanction-review',
+  requireAuth,
+  authorizeRoles(Role.DISBURSEMENT, Role.ADMIN),
+  validateBody(sanctionReviewSchema),
+  asyncHandler(sendForSanctionReview),
+);
+opsRouter.patch(
+  '/loans/:id/disbursement-reject',
+  requireAuth,
+  authorizeRoles(Role.DISBURSEMENT, Role.ADMIN),
+  validateBody(sanctionReviewSchema),
+  asyncHandler(rejectAtDisbursement),
+);
 opsRouter.get('/collection/loans', requireAuth, authorizeRoles(Role.COLLECTION, Role.ADMIN), asyncHandler(collectionLoans));
 opsRouter.get('/collection/history', requireAuth, authorizeRoles(Role.COLLECTION, Role.ADMIN), asyncHandler(collectionHistory));
 opsRouter.post(
@@ -45,6 +62,12 @@ opsRouter.post(
   authorizeRoles(Role.COLLECTION, Role.ADMIN),
   validateBody(paymentSchema),
   asyncHandler(addPayment),
+);
+opsRouter.get(
+  '/loans/:id/salary-slip',
+  requireAuth,
+  authorizeRoles(Role.ADMIN, Role.SANCTION, Role.DISBURSEMENT),
+  asyncHandler(salarySlipPreview),
 );
 opsRouter.get(
   '/loans/:id',

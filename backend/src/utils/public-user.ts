@@ -4,6 +4,7 @@ export const toPublicUser = (user: Partial<UserDocument> & { _id: unknown }) => 
   id: String(user._id),
   email: user.email,
   role: user.role,
+  emailVerified: Boolean(user.emailVerified),
   fullName: user.fullName ?? null,
   pan: user.pan ?? null,
   dateOfBirth: user.dateOfBirth ?? null,

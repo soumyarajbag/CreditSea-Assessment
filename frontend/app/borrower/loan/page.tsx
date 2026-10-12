@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
-import { CalendarDays, Check, Clock3, Eye, FileCheck2, FileText, IndianRupee, Sparkles, WalletCards } from 'lucide-react';
+import { CalendarDays, Check, Clock3, Eye, FileCheck2, FileText, History, IndianRupee, Sparkles, WalletCards } from 'lucide-react';
 
 import { AppShell } from '@/components/app-shell';
 import { UnauthorizedState } from '@/components/access-state';
@@ -15,7 +15,7 @@ import { formatCurrency, formatDate, formatLoanStatus } from '@/lib/format';
 import { Loan, LoanStatus } from '@/lib/types';
 import { cn } from '@/lib/utils';
 
-const stages: LoanStatus[] = ['APPLIED', 'SANCTIONED', 'DISBURSED', 'CLOSED'];
+const stages: LoanStatus[] = ['APPLIED', 'SANCTION_REVIEW', 'SANCTIONED', 'DISBURSED', 'CLOSED'];
 
 function PreviewFrame({ url, mimeType, className = '' }: { url: string; mimeType: string; className?: string }) {
   if (mimeType === 'application/pdf') {
@@ -28,7 +28,7 @@ function LoanProgress({ status }: { status: LoanStatus }) {
   const currentIndex = status === 'REJECTED' ? -1 : stages.indexOf(status);
 
   return (
-    <div className="grid gap-4 sm:grid-cols-4">
+    <div className="grid gap-4 sm:grid-cols-5">
       {stages.map((stage, index) => {
         const reached = index <= currentIndex;
         return (
@@ -54,11 +54,13 @@ function LoanProgress({ status }: { status: LoanStatus }) {
               <p className="mt-1 hidden text-[11px] text-slate-500 sm:block">
                 {stage === 'APPLIED'
                   ? 'Submitted'
-                  : stage === 'SANCTIONED'
-                    ? 'Reviewed'
-                    : stage === 'DISBURSED'
-                      ? 'Funds released'
-                      : 'Fully repaid'}
+                  : stage === 'SANCTION_REVIEW'
+                    ? 'Needs review'
+                    : stage === 'SANCTIONED'
+                      ? 'Approved'
+                      : stage === 'DISBURSED'
+                        ? 'Funds released'
+                        : 'Fully repaid'}
               </p>
             </div>
           </div>
@@ -72,6 +74,7 @@ export default function BorrowerLoanPage() {
   const { user, loading } = useAuth();
   const { toast } = useToast();
   const [loan, setLoan] = useState<Loan | null>(null);
+  const [loans, setLoans] = useState<Loan[]>([]);
   const [loadingLoan, setLoadingLoan] = useState(true);
   const [loadingPreview, setLoadingPreview] = useState(false);
   const [salarySlipPreviewUrl, setSalarySlipPreviewUrl] = useState<string | null>(null);
@@ -81,8 +84,11 @@ export default function BorrowerLoanPage() {
 
   useEffect(() => {
     if (!user || user.role !== 'BORROWER') return;
-    apiFetch<{ loan: Loan }>('/borrower/loans/current')
-      .then(({ loan: currentLoan }) => setLoan(currentLoan))
+    apiFetch<{ loans: Loan[] }>('/borrower/loans')
+      .then(({ loans: borrowerLoans }) => {
+        setLoans(borrowerLoans);
+        setLoan(borrowerLoans[0] ?? null);
+      })
       .catch((requestError) => {
         if (!(requestError instanceof ApiError && requestError.status === 404)) {
           const message = requestError instanceof ApiError ? requestError.message : 'Unable to load your loan.';
@@ -183,6 +189,17 @@ export default function BorrowerLoanPage() {
             {loan.status === 'REJECTED' && (
               <div className="relative mt-6 rounded-2xl border border-rose-300/20 bg-rose-400/10 p-4 text-sm text-rose-100">
                 <strong>Application rejected:</strong> {loan.rejectionReason ?? 'No reason provided.'}
+                <Link
+                  href="/borrower/apply"
+                  className="mt-3 inline-flex rounded-xl bg-white px-3 py-2 text-xs font-bold text-rose-700 transition hover:bg-rose-50"
+                >
+                  Apply again
+                </Link>
+              </div>
+            )}
+            {loan.status === 'SANCTION_REVIEW' && (
+              <div className="relative mt-6 rounded-2xl border border-orange-300/20 bg-orange-400/10 p-4 text-sm text-orange-100">
+                <strong>Sanction review requested:</strong> {loan.reviewComment ?? 'The application needs another review.'}
               </div>
             )}
             <div className="relative mt-9 rounded-2xl border border-white/20 bg-white p-5 shadow-lg shadow-black/10">
@@ -219,6 +236,8 @@ export default function BorrowerLoanPage() {
                   <span className="text-slate-500">Paid so far</span>
                   <span className="font-semibold text-emerald-600">{formatCurrency(loan.totalPaid)}</span>
                 </div>
+
+                {loans.length > 1 && <LoanHistory loans={loans.slice(1)} />}
               </div>
               <div className="mt-8 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50 p-5">
                 <p className="text-xs font-bold uppercase tracking-[0.16em] text-blue-600">Outstanding balance</p>
@@ -325,5 +344,60 @@ export default function BorrowerLoanPage() {
         </div>
       )}
     </AppShell>
+  );
+}
+
+function LoanHistory({ loans }: { loans: Loan[] }) {
+  return (
+    <Card className="p-6 md:p-7">
+      <div className="flex items-start gap-3">
+        <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-600">
+          <History className="h-5 w-5" />
+        </div>
+        <div>
+          <h2 className="text-lg font-bold text-ink">Application history</h2>
+          <p className="mt-1 text-sm text-slate-500">Review your previous closed, rejected, and active loan records.</p>
+        </div>
+      </div>
+      <div className="mt-5 space-y-3">
+        {loans.map((historyLoan) => (
+          <div key={historyLoan.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-lg font-black text-ink">{formatCurrency(historyLoan.amount)}</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  Applied {formatDate(historyLoan.createdAt)} · {historyLoan.tenureDays}-day term
+                </p>
+              </div>
+              <StatusBadge status={historyLoan.status} />
+            </div>
+            <div className="mt-4 grid gap-3 border-t border-slate-200 pt-4 text-sm sm:grid-cols-3">
+              <div>
+                <p className="text-xs text-slate-500">Total repayment</p>
+                <p className="mt-1 font-bold text-ink">{formatCurrency(historyLoan.totalRepayment)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-500">Paid</p>
+                <p className="mt-1 font-bold text-ink">{formatCurrency(historyLoan.totalPaid)}</p>
+              </div>
+              <div>
+                <p className="text-xs text-slate-500">Last updated</p>
+                <p className="mt-1 font-bold text-ink">{formatDate(historyLoan.updatedAt)}</p>
+              </div>
+            </div>
+            {historyLoan.status === 'REJECTED' && historyLoan.rejectionReason && (
+              <p className="mt-4 rounded-xl border border-rose-100 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+                <span className="font-bold">Rejection comment:</span> {historyLoan.rejectionReason}
+              </p>
+            )}
+            {historyLoan.status === 'SANCTION_REVIEW' && historyLoan.reviewComment && (
+              <p className="mt-4 rounded-xl border border-orange-100 bg-orange-50 px-3 py-2 text-sm text-orange-800">
+                <span className="font-bold">Review comment:</span> {historyLoan.reviewComment}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </Card>
   );
 }

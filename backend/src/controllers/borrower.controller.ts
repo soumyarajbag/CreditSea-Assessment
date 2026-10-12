@@ -3,6 +3,7 @@ import { Request, Response } from 'express';
 import {
   createLoanApplication,
   getBorrowerLoan,
+  getBorrowerLoans,
   getBorrowerProfile,
   getBorrowerSalarySlip,
   updateBorrowerProfile,
@@ -34,6 +35,10 @@ export const applyForLoan = async (req: Request, res: Response): Promise<void> =
 export const getLoan = async (req: Request, res: Response): Promise<void> => {
   const loan = await getBorrowerLoan(req.auth!.userId);
   res.status(200).json({ loan });
+};
+
+export const getLoans = async (req: Request, res: Response): Promise<void> => {
+  res.status(200).json(await getBorrowerLoans(req.auth!.userId));
 };
 
 export const getSalarySlip = async (req: Request, res: Response): Promise<void> => {

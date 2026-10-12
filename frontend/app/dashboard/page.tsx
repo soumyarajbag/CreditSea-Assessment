@@ -1,14 +1,27 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, CalendarDays, ChevronDown, LockKeyhole, Mail, Search, ShieldCheck, Trash2, UsersRound, X } from 'lucide-react';
+import {
+  AlertTriangle,
+  CalendarDays,
+  ChevronDown,
+  Eye,
+  FileText,
+  LockKeyhole,
+  Mail,
+  Search,
+  ShieldCheck,
+  Trash2,
+  UsersRound,
+  X,
+} from 'lucide-react';
 
 import { AppShell } from '@/components/app-shell';
 import { UnauthorizedState } from '@/components/access-state';
 import { useToast } from '@/components/toast';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Card, CreditSeaLoader, EmptyState, ErrorMessage, InfoTooltip, SectionHeading, Spinner, StatusBadge } from '@/components/ui';
-import { ApiError, apiFetch } from '@/lib/api';
+import { ApiError, apiFetch, apiFetchBlob } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { dateInputToEpoch, formatCurrency, formatDate } from '@/lib/format';
 import { CollectionHistoryLoan, Lead, Loan, PaginationMeta, Role } from '@/lib/types';
@@ -19,7 +32,7 @@ type SanctionView = 'pending' | 'history';
 type DisbursementView = 'pending' | 'history';
 type CollectionView = 'pending' | 'history';
 type SanctionHistoryFilter = 'ALL' | 'SANCTIONED' | 'REJECTED' | 'DISBURSED' | 'CLOSED';
-type DisbursementHistoryFilter = 'ALL' | 'DISBURSED' | 'CLOSED';
+type DisbursementHistoryFilter = 'ALL' | 'SANCTION_REVIEW' | 'REJECTED' | 'DISBURSED' | 'CLOSED';
 type CollectionHistoryFilter = 'ALL' | 'DISBURSED' | 'CLOSED';
 type SearchScope =
   | 'sales'
@@ -38,6 +51,7 @@ type DeleteTarget = {
   restriction: string;
 };
 type LoadContext = { id: number; key: string };
+type SalarySlipPreview = { url: string; mimeType: string; originalName: string };
 
 const PAGE_SIZE = 10;
 
@@ -83,7 +97,7 @@ const searchFieldConfig: Record<SearchScope, SearchFieldConfig> = {
   disbursementHistory: {
     label: 'Search disbursement history',
     placeholder: 'Borrower name, email, PAN, or loan ID',
-    help: 'Search disbursed and closed loans by borrower details or loan ID.',
+    help: 'Search sanction-review, rejected, disbursed, and closed loans by borrower details or loan ID.',
   },
   collectionPending: {
     label: 'Search repayment accounts',
@@ -142,6 +156,9 @@ export default function DashboardPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
+  const [reviewId, setReviewId] = useState<string | null>(null);
+  const [reviewReason, setReviewReason] = useState('');
+  const [disbursementReviewMode, setDisbursementReviewMode] = useState<'REJECT' | 'SANCTION_REVIEW'>('SANCTION_REVIEW');
   const [paymentFields, setPaymentFields] = useState<Record<string, { utr: string; amount: string; paymentDate: string }>>({});
   const [searchInputByScope, setSearchInputByScope] = useState<Record<SearchScope, string>>({
     sales: '',
@@ -162,6 +179,8 @@ export default function DashboardPage() {
     collectionHistory: '',
   });
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
+  const [salarySlipPreview, setSalarySlipPreview] = useState<SalarySlipPreview | null>(null);
+  const [previewLoadingId, setPreviewLoadingId] = useState<string | null>(null);
   const loadSequenceRef = useRef(0);
   const activeLoadRef = useRef<LoadContext | null>(null);
 
@@ -193,6 +212,12 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!loading && user && user.role !== 'ADMIN') setActiveModule(firstModuleForRole(user.role));
   }, [loading, user]);
+
+  useEffect(() => {
+    return () => {
+      if (salarySlipPreview?.url) URL.revokeObjectURL(salarySlipPreview.url);
+    };
+  }, [salarySlipPreview]);
 
   useEffect(() => {
     const timeoutId = window.setTimeout(() => {
@@ -355,7 +380,7 @@ export default function DashboardPage() {
     visibleModules,
   ]);
 
-  const runAction = async (id: string, action: () => Promise<void>, successMessage: string) => {
+  const runAction = async (id: string, action: () => Promise<void>, successMessage: string): Promise<boolean> => {
     setBusyId(id);
     setError(null);
     setSuccess(null);
@@ -364,10 +389,12 @@ export default function DashboardPage() {
       setSuccess(successMessage);
       toast.success(successMessage);
       await refreshCurrentView();
+      return true;
     } catch (requestError) {
       const message = requestError instanceof ApiError ? requestError.message : 'Unable to complete the action.';
       setError(message);
       toast.error(message);
+      return false;
     } finally {
       setBusyId(null);
     }
@@ -390,7 +417,7 @@ export default function DashboardPage() {
     event.preventDefault();
     if (!rejectId || !rejectReason.trim()) return;
     const currentRejectId = rejectId;
-    await runAction(
+    const succeeded = await runAction(
       currentRejectId,
       async () => {
         await apiFetch(`/ops/loans/${currentRejectId}/sanction`, {
@@ -401,8 +428,31 @@ export default function DashboardPage() {
       },
       'Loan rejected.',
     );
+    if (!succeeded) return;
     setRejectId(null);
     setRejectReason('');
+  };
+
+  const sendForSanctionReview = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!reviewId || !reviewReason.trim()) return;
+    const currentReviewId = reviewId;
+    const succeeded = await runAction(
+      currentReviewId,
+      async () => {
+        const route = disbursementReviewMode === 'REJECT' ? 'disbursement-reject' : 'sanction-review';
+        await apiFetch(`/ops/loans/${currentReviewId}/${route}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ reason: reviewReason }),
+          headers: { 'Content-Type': 'application/json' },
+        });
+      },
+      disbursementReviewMode === 'REJECT' ? 'Loan rejected. Borrower can apply again.' : 'Loan sent back for sanction review.',
+    );
+    if (!succeeded) return;
+    setReviewId(null);
+    setReviewReason('');
+    setDisbursementReviewMode('SANCTION_REVIEW');
   };
 
   const disburse = (loanId: string) =>
@@ -413,6 +463,26 @@ export default function DashboardPage() {
       },
       'Loan marked as disbursed.',
     );
+
+  const previewSalarySlip = async (loan: Loan) => {
+    setPreviewLoadingId(loan.id);
+    try {
+      const blob = await apiFetchBlob(`/ops/loans/${loan.id}/salary-slip`);
+      const mimeType = blob.type && blob.type !== 'application/octet-stream' ? blob.type : (loan.salarySlip?.mimeType ?? '');
+      setSalarySlipPreview({
+        url: URL.createObjectURL(blob),
+        mimeType,
+        originalName: loan.salarySlip?.originalName ?? 'Submitted salary slip',
+      });
+      toast.success('Salary slip preview loaded.');
+    } catch (requestError) {
+      const message = requestError instanceof ApiError ? requestError.message : 'Salary slip preview is unavailable.';
+      setError(message);
+      toast.error(message);
+    } finally {
+      setPreviewLoadingId(null);
+    }
+  };
 
   const requestDeleteBorrower = (borrowerId: string, borrowerName: string) =>
     setDeleteTarget({
@@ -429,7 +499,7 @@ export default function DashboardPage() {
       id: loanId,
       subject: borrowerName,
       description: 'This removes the selected non-financial loan application.',
-      restriction: 'Only APPLIED or REJECTED applications with no payment history can be deleted.',
+      restriction: 'Only APPLIED, SANCTION_REVIEW, or REJECTED applications with no payment history can be deleted.',
     });
 
   const confirmDelete = async () => {
@@ -457,18 +527,34 @@ export default function DashboardPage() {
       toast.error(message);
       return;
     }
-    const isFinalPayment = Number(fields.amount) === loan.outstandingBalance;
-    await runAction(
+    const amount = Number(fields.amount);
+    const amountInPaise = Math.round(amount * 100);
+    const outstandingInPaise = Math.round(loan.outstandingBalance * 100);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      const message = 'Payment amount must be greater than zero.';
+      setError(message);
+      toast.error(message);
+      return;
+    }
+    if (amountInPaise > outstandingInPaise) {
+      const message = `Payment amount cannot be greater than the outstanding balance of ${formatCurrency(loan.outstandingBalance)}.`;
+      setError(message);
+      toast.error(message);
+      return;
+    }
+    const isFinalPayment = amountInPaise === outstandingInPaise;
+    const succeeded = await runAction(
       loan.id,
       async () => {
         await apiFetch(`/ops/loans/${loan.id}/payments`, {
           method: 'POST',
-          body: JSON.stringify({ utr: normalizedUtr, amount: fields.amount, paymentDate: dateInputToEpoch(fields.paymentDate) }),
+          body: JSON.stringify({ utr: normalizedUtr, amount, paymentDate: dateInputToEpoch(fields.paymentDate) }),
           headers: { 'Content-Type': 'application/json' },
         });
       },
       isFinalPayment ? 'Payment recorded. Loan is now closed.' : 'Payment recorded.',
     );
+    if (!succeeded) return;
     setPaymentFields((current) => ({ ...current, [loan.id]: { utr: '', amount: '', paymentDate: new Date().toISOString().slice(0, 10) } }));
   };
 
@@ -620,6 +706,8 @@ export default function DashboardPage() {
                 setRejectId={setRejectId}
                 setRejectReason={setRejectReason}
                 onReject={reject}
+                onPreviewSalarySlip={previewSalarySlip}
+                previewLoadingId={previewLoadingId}
               />
             ) : (
               <SanctionHistoryPanel
@@ -635,6 +723,8 @@ export default function DashboardPage() {
                   setSanctionHistoryPage(1);
                 }}
                 onPageChange={setSanctionHistoryPage}
+                onPreviewSalarySlip={previewSalarySlip}
+                previewLoadingId={previewLoadingId}
               />
             )
           ) : activeModule === 'disbursement' ? (
@@ -646,6 +736,15 @@ export default function DashboardPage() {
                 onPageChange={setLoansPage}
                 busyId={busyId}
                 onDisburse={disburse}
+                onPreviewSalarySlip={previewSalarySlip}
+                previewLoadingId={previewLoadingId}
+                reviewId={reviewId}
+                reviewReason={reviewReason}
+                setReviewId={setReviewId}
+                setReviewReason={setReviewReason}
+                disbursementReviewMode={disbursementReviewMode}
+                setDisbursementReviewMode={setDisbursementReviewMode}
+                onSendForSanctionReview={sendForSanctionReview}
               />
             ) : (
               <DisbursementHistoryPanel
@@ -658,6 +757,8 @@ export default function DashboardPage() {
                   setDisbursementHistoryPage(1);
                 }}
                 onPageChange={setDisbursementHistoryPage}
+                onPreviewSalarySlip={previewSalarySlip}
+                previewLoadingId={previewLoadingId}
               />
             )
           ) : collectionView === 'pending' ? (
@@ -687,6 +788,7 @@ export default function DashboardPage() {
         </div>
       </div>
       {user?.role === 'ADMIN' && <AdminControlsPanel />}
+      <SalarySlipPreviewDialog preview={salarySlipPreview} onOpenChange={(open) => !open && setSalarySlipPreview(null)} />
       <Dialog
         open={deleteTarget !== null}
         onOpenChange={(open) => {
@@ -731,6 +833,35 @@ export default function DashboardPage() {
       </Dialog>
     </AppShell>
   );
+}
+
+function SalarySlipPreviewDialog({ preview, onOpenChange }: { preview: SalarySlipPreview | null; onOpenChange: (open: boolean) => void }) {
+  return (
+    <Dialog open={preview !== null} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-5xl p-4 sm:p-6">
+        <DialogHeader className="px-2 pt-1">
+          <DialogTitle className="flex items-center gap-2">
+            <FileText className="h-5 w-5 text-blue-600" /> Salary slip preview
+          </DialogTitle>
+          <DialogDescription>
+            {preview?.originalName ?? 'Submitted salary slip'} · Protected operations preview; the stored file URL is not exposed.
+          </DialogDescription>
+        </DialogHeader>
+        {preview && (
+          <div className="mt-2 overflow-hidden rounded-2xl border border-slate-200 bg-slate-100">
+            <SalarySlipPreviewFrame url={preview.url} mimeType={preview.mimeType} className="h-[min(68vh,720px)] object-contain" />
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function SalarySlipPreviewFrame({ url, mimeType, className = '' }: { url: string; mimeType: string; className?: string }) {
+  if (mimeType === 'application/pdf') {
+    return <iframe title="Salary slip document" src={url} className={`w-full bg-white ${className}`} />;
+  }
+  return <img src={url} alt="Salary slip" className={`w-full object-contain ${className}`} />;
 }
 
 function SearchField({ config, value, onChange }: { config: SearchFieldConfig; value: string; onChange: (value: string) => void }) {
@@ -809,7 +940,8 @@ function AdminControlsPanel() {
               <h3 className="text-sm font-bold text-ink">Delete a loan application</h3>
             </div>
             <p className="mt-2 text-sm leading-5 text-slate-500">
-              Open Sanction and use <span className="font-bold text-ink">Delete application</span> for an applied or rejected record.
+              Open Sanction and use <span className="font-bold text-ink">Delete application</span> for an applied, sanction-review, or
+              rejected record.
             </p>
             <p className="mt-3 text-xs font-bold text-emerald-700">Allowed: no payment history</p>
           </div>
@@ -1057,6 +1189,8 @@ function SanctionPanel({
   setRejectId,
   setRejectReason,
   onReject,
+  onPreviewSalarySlip,
+  previewLoadingId,
 }: {
   loans: Loan[];
   pagination: PaginationMeta | null;
@@ -1071,53 +1205,73 @@ function SanctionPanel({
   setRejectId: (id: string | null) => void;
   setRejectReason: (reason: string) => void;
   onReject: (event: FormEvent<HTMLFormElement>) => void;
+  onPreviewSalarySlip: (loan: Loan) => void;
+  previewLoadingId: string | null;
 }) {
   return (
     <div>
       <LoanTable loans={loans}>
         {(loan) => (
-          <div className="mt-5 flex flex-wrap gap-2">
-            {rejectId === loan.id ? (
-              <form onSubmit={onReject} className="flex w-full flex-col gap-2 sm:flex-row">
-                <input
-                  className="field mt-0 flex-1"
-                  value={rejectReason}
-                  onChange={(event) => setRejectReason(event.target.value)}
-                  placeholder="Reason for rejection"
-                  required
-                />
-                <button className="primary-button bg-rose-600 hover:bg-rose-700" disabled={busyId !== null}>
-                  {busyId !== null && <Spinner className="h-3.5 w-3.5" />}
-                  {busyId !== null ? 'Saving…' : 'Confirm rejection'}
-                </button>
-                <button type="button" className="secondary-button" disabled={busyId !== null} onClick={() => setRejectId(null)}>
-                  Cancel
-                </button>
-              </form>
-            ) : (
-              <>
-                <button className="primary-button" disabled={busyId !== null} onClick={() => onApprove(loan.id)}>
-                  {busyId !== null && <Spinner className="h-3.5 w-3.5" />}
-                  {busyId !== null ? 'Saving…' : 'Approve loan'}
-                </button>
-                <button className="secondary-button text-rose-600" disabled={busyId !== null} onClick={() => setRejectId(loan.id)}>
-                  Reject
-                </button>
-                {canDelete && (
+          <div>
+            {loan.status === 'SANCTION_REVIEW' && loan.reviewComment && (
+              <div className="mt-5 rounded-xl border border-orange-100 bg-orange-50 px-4 py-3 text-sm text-orange-800">
+                <p className="font-bold">Returned by disbursement for review</p>
+                <p className="mt-1 leading-5">{loan.reviewComment}</p>
+              </div>
+            )}
+            <div className="mt-5 flex flex-wrap gap-2">
+              {rejectId === loan.id ? (
+                <form onSubmit={onReject} className="flex w-full flex-col gap-2 sm:flex-row">
+                  <textarea
+                    className="field mt-0 min-h-20 flex-1 resize-y"
+                    value={rejectReason}
+                    onChange={(event) => setRejectReason(event.target.value)}
+                    placeholder="Reason for rejection"
+                    maxLength={500}
+                    required
+                  />
+                  <button className="primary-button bg-rose-600 hover:bg-rose-700" disabled={busyId !== null}>
+                    {busyId !== null && <Spinner className="h-3.5 w-3.5" />}
+                    {busyId !== null ? 'Saving…' : 'Confirm rejection'}
+                  </button>
+                  <button type="button" className="secondary-button" disabled={busyId !== null} onClick={() => setRejectId(null)}>
+                    Cancel
+                  </button>
+                </form>
+              ) : (
+                <>
                   <button
                     type="button"
-                    title="Delete loan application"
-                    aria-label={`Delete loan application for ${loan.borrower?.fullName ?? 'borrower'}`}
-                    className="inline-flex items-center justify-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700 transition hover:-translate-y-0.5 hover:bg-rose-100 focus:outline-none focus:ring-4 focus:ring-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
-                    disabled={busyId !== null}
-                    onClick={() => onDelete(loan.id, loan.borrower?.fullName ?? 'Borrower')}
+                    className="secondary-button"
+                    disabled={busyId !== null || previewLoadingId !== null}
+                    onClick={() => onPreviewSalarySlip(loan)}
                   >
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Delete application
+                    {previewLoadingId === loan.id ? <Spinner className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    {previewLoadingId === loan.id ? 'Loading slip…' : 'View salary slip'}
                   </button>
-                )}
-              </>
-            )}
+                  <button className="primary-button" disabled={busyId !== null} onClick={() => onApprove(loan.id)}>
+                    {busyId !== null && <Spinner className="h-3.5 w-3.5" />}
+                    {busyId !== null ? 'Saving…' : 'Approve loan'}
+                  </button>
+                  <button className="secondary-button text-rose-600" disabled={busyId !== null} onClick={() => setRejectId(loan.id)}>
+                    Reject
+                  </button>
+                  {canDelete && (
+                    <button
+                      type="button"
+                      title="Delete loan application"
+                      aria-label={`Delete loan application for ${loan.borrower?.fullName ?? 'borrower'}`}
+                      className="inline-flex items-center justify-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-bold text-rose-700 transition hover:-translate-y-0.5 hover:bg-rose-100 focus:outline-none focus:ring-4 focus:ring-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      disabled={busyId !== null}
+                      onClick={() => onDelete(loan.id, loan.borrower?.fullName ?? 'Borrower')}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete application
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         )}
       </LoanTable>
@@ -1136,6 +1290,8 @@ function SanctionHistoryPanel({
   filter,
   onFilterChange,
   onPageChange,
+  onPreviewSalarySlip,
+  previewLoadingId,
 }: {
   loans: Loan[];
   pagination: PaginationMeta | null;
@@ -1146,6 +1302,8 @@ function SanctionHistoryPanel({
   filter: SanctionHistoryFilter;
   onFilterChange: (filter: SanctionHistoryFilter) => void;
   onPageChange: (page: number) => void;
+  onPreviewSalarySlip: (loan: Loan) => void;
+  previewLoadingId: string | null;
 }) {
   const filters: Array<{ value: SanctionHistoryFilter; label: string }> = [
     { value: 'ALL', label: 'All history' },
@@ -1184,19 +1342,30 @@ function SanctionHistoryPanel({
                 </p>
               )}
             </div>
-            {canDelete && loan.status === 'REJECTED' && (
+            <div className="flex flex-wrap gap-2">
               <button
                 type="button"
-                title="Delete rejected loan application"
-                aria-label={`Delete rejected application for ${loan.borrower?.fullName ?? 'borrower'}`}
-                className="inline-flex items-center justify-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition hover:-translate-y-0.5 hover:bg-rose-100 focus:outline-none focus:ring-4 focus:ring-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={busyId !== null}
-                onClick={() => onDelete(loan.id, loan.borrower?.fullName ?? 'Borrower')}
+                className="secondary-button px-3 py-2 text-xs"
+                disabled={busyId !== null || previewLoadingId !== null}
+                onClick={() => onPreviewSalarySlip(loan)}
               >
-                <Trash2 className="h-3.5 w-3.5" />
-                Delete application
+                {previewLoadingId === loan.id ? <Spinner className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                {previewLoadingId === loan.id ? 'Loading slip…' : 'View salary slip'}
               </button>
-            )}
+              {canDelete && loan.status === 'REJECTED' && (
+                <button
+                  type="button"
+                  title="Delete rejected loan application"
+                  aria-label={`Delete rejected application for ${loan.borrower?.fullName ?? 'borrower'}`}
+                  className="inline-flex items-center justify-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-xs font-bold text-rose-700 transition hover:-translate-y-0.5 hover:bg-rose-100 focus:outline-none focus:ring-4 focus:ring-rose-100 disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={busyId !== null}
+                  onClick={() => onDelete(loan.id, loan.borrower?.fullName ?? 'Borrower')}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Delete application
+                </button>
+              )}
+            </div>
           </div>
         )}
       </LoanTable>
@@ -1212,6 +1381,15 @@ function DisbursementPanel({
   onPageChange,
   busyId,
   onDisburse,
+  onPreviewSalarySlip,
+  previewLoadingId,
+  reviewId,
+  reviewReason,
+  setReviewId,
+  setReviewReason,
+  disbursementReviewMode,
+  setDisbursementReviewMode,
+  onSendForSanctionReview,
 }: {
   loans: Loan[];
   pagination: PaginationMeta | null;
@@ -1219,16 +1397,105 @@ function DisbursementPanel({
   onPageChange: (page: number) => void;
   busyId: string | null;
   onDisburse: (id: string) => void;
+  onPreviewSalarySlip: (loan: Loan) => void;
+  previewLoadingId: string | null;
+  reviewId: string | null;
+  reviewReason: string;
+  setReviewId: (id: string | null) => void;
+  setReviewReason: (reason: string) => void;
+  disbursementReviewMode: 'REJECT' | 'SANCTION_REVIEW';
+  setDisbursementReviewMode: (mode: 'REJECT' | 'SANCTION_REVIEW') => void;
+  onSendForSanctionReview: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   return (
     <div>
       <LoanTable loans={loans}>
         {(loan) => (
           <div className="mt-5">
-            <button className="primary-button" disabled={busyId !== null} onClick={() => onDisburse(loan.id)}>
-              {busyId !== null && <Spinner className="h-3.5 w-3.5" />}
-              {busyId !== null ? 'Saving…' : 'Mark as disbursed'}
-            </button>
+            {reviewId === loan.id ? (
+              <form onSubmit={onSendForSanctionReview} className="space-y-3 rounded-2xl border border-orange-100 bg-orange-50 p-4">
+                <div>
+                  <p className="text-sm font-bold text-orange-900">
+                    {disbursementReviewMode === 'REJECT' ? 'Reject loan application' : 'Send back for sanction review'}
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-orange-800">
+                    {disbursementReviewMode === 'REJECT'
+                      ? 'Add the rejection comment. The borrower will be able to correct the issue and apply again.'
+                      : 'Add the issue that the sanctioner must review. This comment will be visible to the borrower.'}
+                  </p>
+                </div>
+                <textarea
+                  className="field min-h-24 resize-y bg-white"
+                  value={reviewReason}
+                  onChange={(event) => setReviewReason(event.target.value)}
+                  placeholder={
+                    disbursementReviewMode === 'REJECT'
+                      ? 'Explain why this loan cannot be disbursed.'
+                      : 'Explain what needs to be corrected before disbursement.'
+                  }
+                  maxLength={500}
+                  required
+                />
+                <div className="flex flex-wrap gap-2">
+                  <button className="primary-button bg-orange-600 hover:bg-orange-700" disabled={busyId !== null}>
+                    {busyId !== null && <Spinner className="h-3.5 w-3.5" />}
+                    {busyId !== null ? 'Saving…' : disbursementReviewMode === 'REJECT' ? 'Confirm rejection' : 'Send for sanction review'}
+                  </button>
+                  <button
+                    type="button"
+                    className="secondary-button"
+                    disabled={busyId !== null}
+                    onClick={() => {
+                      setReviewId(null);
+                      setReviewReason('');
+                      setDisbursementReviewMode('SANCTION_REVIEW');
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="secondary-button"
+                  disabled={busyId !== null || previewLoadingId !== null}
+                  onClick={() => onPreviewSalarySlip(loan)}
+                >
+                  {previewLoadingId === loan.id ? <Spinner className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                  {previewLoadingId === loan.id ? 'Loading slip…' : 'View salary slip'}
+                </button>
+                <button className="primary-button" disabled={busyId !== null} onClick={() => onDisburse(loan.id)}>
+                  {busyId !== null && <Spinner className="h-3.5 w-3.5" />}
+                  {busyId !== null ? 'Saving…' : 'Mark as disbursed'}
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button text-orange-700"
+                  disabled={busyId !== null}
+                  onClick={() => {
+                    setReviewReason('');
+                    setDisbursementReviewMode('SANCTION_REVIEW');
+                    setReviewId(loan.id);
+                  }}
+                >
+                  Send for sanction review
+                </button>
+                <button
+                  type="button"
+                  className="secondary-button text-rose-600"
+                  disabled={busyId !== null}
+                  onClick={() => {
+                    setReviewReason('');
+                    setDisbursementReviewMode('REJECT');
+                    setReviewId(loan.id);
+                  }}
+                >
+                  Reject loan
+                </button>
+              </div>
+            )}
           </div>
         )}
       </LoanTable>
@@ -1244,6 +1511,8 @@ function DisbursementHistoryPanel({
   filter,
   onFilterChange,
   onPageChange,
+  onPreviewSalarySlip,
+  previewLoadingId,
 }: {
   loans: Loan[];
   pagination: PaginationMeta | null;
@@ -1251,9 +1520,13 @@ function DisbursementHistoryPanel({
   filter: DisbursementHistoryFilter;
   onFilterChange: (filter: DisbursementHistoryFilter) => void;
   onPageChange: (page: number) => void;
+  onPreviewSalarySlip: (loan: Loan) => void;
+  previewLoadingId: string | null;
 }) {
   const filters: Array<{ value: DisbursementHistoryFilter; label: string }> = [
     { value: 'ALL', label: 'All history' },
+    { value: 'SANCTION_REVIEW', label: 'Sanction review' },
+    { value: 'REJECTED', label: 'Rejected' },
     { value: 'DISBURSED', label: 'Disbursed' },
     { value: 'CLOSED', label: 'Closed' },
   ];
@@ -1274,12 +1547,35 @@ function DisbursementHistoryPanel({
       </div>
       <LoanTable loans={loans}>
         {(loan) => (
-          <div className="mt-5 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            <p>
-              <span className="font-bold text-ink">Disbursement status:</span>{' '}
-              {loan.status === 'CLOSED' ? 'Loan fully repaid after disbursement.' : 'Funds marked as disbursed.'}
-            </p>
-            {loan.disbursedAt && <p className="mt-1 text-xs text-slate-500">Disbursed on {formatDate(loan.disbursedAt)}</p>}
+          <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-100 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+            <div>
+              <p>
+                <span className="font-bold text-ink">
+                  {loan.status === 'REJECTED'
+                    ? 'Rejection comment:'
+                    : loan.status === 'SANCTION_REVIEW'
+                      ? 'Review comment:'
+                      : 'Disbursement status:'}
+                </span>{' '}
+                {loan.status === 'REJECTED'
+                  ? (loan.rejectionReason ?? 'No reason provided.')
+                  : loan.status === 'SANCTION_REVIEW'
+                    ? (loan.reviewComment ?? 'Returned to sanction for another review.')
+                    : loan.status === 'CLOSED'
+                      ? 'Loan fully repaid after disbursement.'
+                      : 'Funds marked as disbursed.'}
+              </p>
+              {loan.disbursedAt && <p className="mt-1 text-xs text-slate-500">Disbursed on {formatDate(loan.disbursedAt)}</p>}
+            </div>
+            <button
+              type="button"
+              className="secondary-button px-3 py-2 text-xs"
+              disabled={disabled || previewLoadingId !== null}
+              onClick={() => onPreviewSalarySlip(loan)}
+            >
+              {previewLoadingId === loan.id ? <Spinner className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+              {previewLoadingId === loan.id ? 'Loading slip…' : 'View salary slip'}
+            </button>
           </div>
         )}
       </LoanTable>
@@ -1379,6 +1675,9 @@ function CollectionPanel({
         {(loan) => {
           const current = fields[loan.id] ?? { utr: '', amount: '', paymentDate: new Date().toISOString().slice(0, 10) };
           const hasPreviousPayment = loan.totalPaid > 0;
+          const enteredAmount = Number(current.amount);
+          const amountExceedsOutstanding =
+            current.amount !== '' && Number.isFinite(enteredAmount) && enteredAmount > loan.outstandingBalance;
 
           return (
             <div>
@@ -1418,7 +1717,7 @@ function CollectionPanel({
                 <label className="text-xs font-bold text-slate-500">
                   Amount
                   <input
-                    className="field"
+                    className={`field ${amountExceedsOutstanding ? 'border-rose-300 focus:border-rose-500 focus:ring-rose-100' : ''}`}
                     type="number"
                     min="0.01"
                     max={loan.outstandingBalance}
@@ -1426,8 +1725,18 @@ function CollectionPanel({
                     value={current.amount}
                     onChange={(event) => onFieldChange(loan.id, 'amount', event.target.value)}
                     placeholder={String(loan.outstandingBalance)}
+                    aria-invalid={amountExceedsOutstanding}
+                    aria-describedby={`payment-amount-help-${loan.id}`}
                     required
                   />
+                  <span
+                    id={`payment-amount-help-${loan.id}`}
+                    className={`mt-1 block font-normal ${amountExceedsOutstanding ? 'text-rose-600' : 'text-slate-400'}`}
+                  >
+                    {amountExceedsOutstanding
+                      ? `Cannot exceed ${formatCurrency(loan.outstandingBalance)}.`
+                      : `Maximum ${formatCurrency(loan.outstandingBalance)}.`}
+                  </span>
                 </label>
                 <label className="text-xs font-bold text-slate-500">
                   Payment date

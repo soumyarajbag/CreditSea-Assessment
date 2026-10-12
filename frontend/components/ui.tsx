@@ -31,6 +31,7 @@ export function SectionHeading({ eyebrow, title, description }: { eyebrow?: stri
 export function StatusBadge({ status }: { status: LoanStatus }) {
   const styles: Record<LoanStatus, string> = {
     APPLIED: 'bg-amber-50 text-amber-700 ring-amber-600/20',
+    SANCTION_REVIEW: 'bg-orange-50 text-orange-700 ring-orange-600/20',
     SANCTIONED: 'bg-blue-50 text-blue-700 ring-blue-600/20',
     REJECTED: 'bg-rose-50 text-rose-700 ring-rose-600/20',
     DISBURSED: 'bg-violet-50 text-violet-700 ring-violet-600/20',
